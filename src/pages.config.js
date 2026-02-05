@@ -47,8 +47,22 @@
  *
  * The mainPage value must match a key in the PAGES object exactly.
  */
+import Dashboard from './pages/Dashboard';
+import NewRun from './pages/NewRun';
+import SpecEditor from './pages/SpecEditor';
+import Settings from './pages/Settings';
+import History from './pages/History';
 
-export const pagesConfig = {
-	Pages: {}
+
+export const PAGES = {
+    "Dashboard": Dashboard,
+    "NewRun": NewRun,
+    "SpecEditor": SpecEditor,
+    "Settings": Settings,
+    "History": History,
 }
 
+export const pagesConfig = {
+    mainPage: "Dashboard",
+    Pages: PAGES,
+};
