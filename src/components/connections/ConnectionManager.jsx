@@ -256,7 +256,17 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                                     <p className="font-medium text-slate-900">{conn.name}</p>
                                                     <ProviderBadge providerType={conn.provider_type} small />
                                                 </div>
-                                                <p className="text-sm text-slate-500">{conn.base_url}</p>
+                                                <p className="text-sm text-slate-500">
+                                                    {conn.base_url}
+                                                    {conn.model_count > 0 && (
+                                                        <span className="ml-2 text-xs text-slate-400">
+                                                            • {conn.model_count} models
+                                                            {conn.web_search_model_count > 0 && (
+                                                                <span className="text-blue-500"> ({conn.web_search_model_count} with web search)</span>
+                                                            )}
+                                                        </span>
+                                                    )}
+                                                </p>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">

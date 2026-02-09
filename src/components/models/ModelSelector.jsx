@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { RefreshCw, Loader2, Search, CheckCircle, XCircle, HelpCircle, Cpu } from 'lucide-react';
+import { RefreshCw, Loader2, Search, CheckCircle, XCircle, HelpCircle, Cpu, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PROVIDER_LABELS = {
@@ -19,43 +19,62 @@ const PROVIDER_LABELS = {
 export default function ModelSelector({ connectionId, selectedModel, onSelectModel, selectedWebSearch, onSelectWebSearch }) {
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [probing, setProbing] = useState(null);
+    const [refreshing, setRefreshing] = useState(false);
     const [providerType, setProviderType] = useState(null);
     const [filterText, setFilterText] = useState('');
 
     useEffect(() => {
-        if (connectionId) { loadModels(); }
+        if (connectionId) { loadCachedModels(); }
         else { setModels([]); setProviderType(null); }
     }, [connectionId]);
 
-    const loadModels = async () => {
+    // ── Fast path: read cached models from DB (no external API call) ──
+    const loadCachedModels = async () => {
         if (!connectionId) return;
         setLoading(true);
+        try {
+            const resp = await base44.functions.invoke('apiConnections', {
+                action: 'getModels', connection_id: connectionId
+            });
+            setModels(resp.data.models || []);
+            setProviderType(resp.data.provider_type || null);
+        } catch {
+            toast.error('Failed to load models');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // ── Slow path: live fetch from provider API (for manual refresh) ──
+    const refreshModelsLive = async () => {
+        if (!connectionId) return;
+        setRefreshing(true);
         try {
             const resp = await base44.functions.invoke('apiConnections', {
                 action: 'fetchModels', connection_id: connectionId
             });
             setModels(resp.data.models || []);
             setProviderType(resp.data.provider_type || null);
-        } catch { toast.error('Failed to fetch models'); }
-        finally { setLoading(false); }
+            const count = resp.data.models?.length || 0;
+            const wsCount = (resp.data.models || []).filter(m => m.supports_web_search === true).length;
+            toast.success(`Refreshed: ${count} models found${wsCount > 0 ? `, ${wsCount} with web search` : ''}`);
+        } catch {
+            toast.error('Failed to refresh models from provider');
+        } finally {
+            setRefreshing(false);
+        }
     };
 
-    const probeWebSearch = async (modelId) => {
-        setProbing(modelId);
-        try {
-            const resp = await base44.functions.invoke('apiConnections', {
-                action: 'probeWebSearch', connection_id: connectionId, model_id: modelId
-            });
-            await loadModels();
-            if (resp.data.supports_web_search) {
-                toast.success(`Web search supported: ${resp.data.web_search_options.join(', ')}`);
-            } else {
-                toast.info('Web search not supported for this model');
-            }
-        } catch { toast.error('Failed to probe web search'); }
-        finally { setProbing(null); }
-    };
+    // ── Auto-enable web search when user selects a model that supports it ──
+    useEffect(() => {
+        if (!selectedModel || models.length === 0) return;
+        const model = models.find(m => m.model_id === selectedModel);
+        if (model?.supports_web_search === true && model?.web_search_options?.length > 0) {
+            onSelectWebSearch(model.web_search_options[0]);
+        } else {
+            onSelectWebSearch('none');
+        }
+    }, [selectedModel, models]);
 
     const selectedModelData = models.find(m => m.model_id === selectedModel);
     const webSearchOptions = selectedModelData?.web_search_options || [];
@@ -64,6 +83,14 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
         if (!filterText) return true;
         const q = filterText.toLowerCase();
         return (m.model_id || '').toLowerCase().includes(q) || (m.display_name || '').toLowerCase().includes(q);
+    });
+
+    // Sort: web-search-capable models first, then alphabetical
+    const sortedModels = [...filteredModels].sort((a, b) => {
+        const aWs = a.supports_web_search === true ? 0 : 1;
+        const bWs = b.supports_web_search === true ? 0 : 1;
+        if (aWs !== bWs) return aWs - bWs;
+        return (a.display_name || a.model_id || '').localeCompare(b.display_name || b.model_id || '');
     });
 
     if (!connectionId) {
@@ -89,11 +116,17 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                 {PROVIDER_LABELS[providerType] || providerType}
                             </Badge>
                         )}
+                        {models.length > 0 && (
+                            <Badge variant="outline" className="text-[10px]">
+                                {models.length} models
+                            </Badge>
+                        )}
                     </div>
                 </div>
-                <Button variant="outline" size="sm" onClick={loadModels} disabled={loading} className="gap-2">
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Refresh
+                <Button variant="outline" size="sm" onClick={refreshModelsLive}
+                    disabled={loading || refreshing} className="gap-2">
+                    {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    {refreshing ? 'Refreshing...' : 'Refresh'}
                 </Button>
             </div>
 
@@ -104,7 +137,15 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
             ) : models.length === 0 ? (
                 <Card className="border-dashed">
                     <CardContent className="flex flex-col items-center justify-center py-8">
-                        <p className="text-slate-500 text-center text-sm">No models found. Click Refresh to load.</p>
+                        <Cpu className="w-10 h-10 text-slate-300 mb-3" />
+                        <p className="text-slate-500 text-center text-sm mb-3">
+                            No models cached for this connection.
+                        </p>
+                        <Button variant="outline" size="sm" onClick={refreshModelsLive}
+                            disabled={refreshing} className="gap-2">
+                            {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                            Fetch Models from Provider
+                        </Button>
                     </CardContent>
                 </Card>
             ) : (
@@ -121,45 +162,48 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                         <Select value={selectedModel || ''} onValueChange={onSelectModel}>
                             <SelectTrigger><SelectValue placeholder="Choose a model..." /></SelectTrigger>
                             <SelectContent className="max-h-80">
-                                {filteredModels.map((model) => (
+                                {sortedModels.map((model) => (
                                     <SelectItem key={model.id} value={model.model_id}>
                                         <div className="flex items-center gap-2">
                                             <span className="truncate">{model.display_name || model.model_id}</span>
                                             {model.supports_web_search === true && (
-                                                <Badge className="bg-blue-100 text-blue-800 text-[10px] shrink-0">Web</Badge>
+                                                <Badge className="bg-blue-100 text-blue-800 text-[10px] shrink-0">
+                                                    <Globe className="w-2.5 h-2.5 mr-0.5" />Web
+                                                </Badge>
                                             )}
                                         </div>
                                     </SelectItem>
                                 ))}
-                                {filteredModels.length === 0 && (
+                                {sortedModels.length === 0 && (
                                     <div className="px-2 py-4 text-sm text-slate-500 text-center">No models match "{filterText}"</div>
                                 )}
                             </SelectContent>
                         </Select>
                         {models.length > 10 && (
-                            <p className="text-xs text-slate-400">{filteredModels.length} of {models.length} models shown</p>
+                            <p className="text-xs text-slate-400">{sortedModels.length} of {models.length} models shown</p>
                         )}
                     </div>
 
+                    {/* Selected model details */}
                     {selectedModel && (
                         <Card className="bg-slate-50">
                             <CardContent className="p-4">
-                                <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-between mb-2">
                                     <span className="font-medium text-slate-900 text-sm truncate mr-2">
                                         {selectedModelData?.display_name || selectedModel}
                                     </span>
-                                    <Button variant="ghost" size="sm" onClick={() => probeWebSearch(selectedModel)}
-                                        disabled={probing === selectedModel} className="gap-1.5 text-xs shrink-0">
-                                        {probing === selectedModel ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                                        Check Web Search
-                                    </Button>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm text-slate-500">Web Search:</span>
                                     {selectedModelData?.supports_web_search === true ? (
                                         <div className="flex items-center gap-1 text-green-600">
                                             <CheckCircle className="w-4 h-4" />
-                                            <span className="text-sm">Supported {webSearchOptions.length > 0 && <span className="text-slate-400 ml-1">({webSearchOptions.join(', ')})</span>}</span>
+                                            <span className="text-sm">
+                                                Auto-enabled
+                                                {webSearchOptions.length > 0 && (
+                                                    <span className="text-slate-400 ml-1">({webSearchOptions.join(', ')})</span>
+                                                )}
+                                            </span>
                                         </div>
                                     ) : selectedModelData?.supports_web_search === false ? (
                                         <div className="flex items-center gap-1 text-red-500">
@@ -167,7 +211,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                         </div>
                                     ) : (
                                         <div className="flex items-center gap-1 text-amber-500">
-                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown — click Check</span>
+                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown for this provider</span>
                                         </div>
                                     )}
                                 </div>
@@ -178,13 +222,14 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                         </Card>
                     )}
 
+                    {/* Web search override — only shown when model supports it, for manual control */}
                     {selectedModel && webSearchOptions.length > 0 && (
                         <div className="space-y-2">
                             <Label>Web Search Tool</Label>
                             <Select value={selectedWebSearch || 'none'} onValueChange={onSelectWebSearch}>
                                 <SelectTrigger><SelectValue placeholder="Select web search option..." /></SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="none">None (no web search)</SelectItem>
+                                    <SelectItem value="none">None (disable web search)</SelectItem>
                                     {webSearchOptions.map((opt) => (
                                         <SelectItem key={opt} value={opt}>
                                             {opt === 'builtin' ? 'Built-in Web Search' : opt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
@@ -192,6 +237,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                     ))}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-slate-400">Web search was auto-enabled because this model supports it. You can disable it here.</p>
                         </div>
                     )}
 

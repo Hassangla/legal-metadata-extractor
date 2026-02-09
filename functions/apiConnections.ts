@@ -237,6 +237,67 @@ function googleFetchUrl(base, path, apiKey) {
     return url.toString();
 }
 
+// ── WEB SEARCH AUTO-DETECTION ───────────────────────────────
+// Tags models with web search support based on provider + model name.
+// This avoids expensive per-model probe API calls.
+
+function detectWebSearch(providerKey, modelId) {
+    const id = (modelId || '').toLowerCase();
+
+    // Perplexity: all models have built-in web search
+    if (providerKey === 'perplexity') {
+        return { supports: true, options: ['builtin'] };
+    }
+
+    // Anthropic: Claude 3+ and Claude 4 models support web_search tool
+    if (providerKey === 'anthropic') {
+        if (id.includes('claude')) {
+            return { supports: true, options: ['web_search'] };
+        }
+        return { supports: false, options: [] };
+    }
+
+    // Google: Gemini models support google_search tool
+    if (providerKey === 'google') {
+        if (id.includes('gemini')) {
+            return { supports: true, options: ['google_search'] };
+        }
+        return { supports: false, options: [] };
+    }
+
+    // OpenAI direct: GPT-4o, o-series, chatgpt-4o support web search
+    if (providerKey === 'openai') {
+        if (id.includes('gpt-4o') || id.includes('gpt-4-turbo') ||
+            id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4') ||
+            id.startsWith('chatgpt-4o')) {
+            return { supports: true, options: ['web_search_preview'] };
+        }
+        return { supports: false, options: [] };
+    }
+
+    // OpenRouter: detect by model path prefix
+    if (providerKey === 'openrouter') {
+        if (id.includes('anthropic/claude')) {
+            return { supports: true, options: ['web_search'] };
+        }
+        if (id.includes('openai/gpt-4o') || id.includes('openai/chatgpt-4o') ||
+            id.match(/openai\/o[134]/)) {
+            return { supports: true, options: ['web_search_preview'] };
+        }
+        if (id.includes('google/gemini')) {
+            return { supports: true, options: ['google_search'] };
+        }
+        if (id.includes('perplexity/')) {
+            return { supports: true, options: ['builtin'] };
+        }
+        return { supports: null, options: [] }; // unknown for other OpenRouter models
+    }
+
+    // All other providers (groq, together, mistral, azure, openai_compatible)
+    // Cannot reliably determine — leave as null (shows "Unknown" in UI)
+    return { supports: null, options: [] };
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -390,13 +451,18 @@ Deno.serve(async (req) => {
 
             case 'list': {
                 const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
-                return Response.json({
-                    connections: connections.map((c) => ({
+                const enriched = [];
+                for (const c of connections) {
+                    const models = await base44.entities.ModelCatalog.filter({ connection_id: c.id });
+                    enriched.push({
                         ...c,
                         api_key_encrypted: undefined,
                         has_key: !!c.api_key_encrypted,
-                    })),
-                });
+                        model_count: models.length,
+                        web_search_model_count: models.filter(m => m.supports_web_search === true).length,
+                    });
+                }
+                return Response.json({ connections: enriched });
             }
 
             case 'delete': {
@@ -487,6 +553,45 @@ Deno.serve(async (req) => {
                 return Response.json({ supports_web_search: supportsWebSearch, web_search_options: webSearchOptions });
             }
 
+            case 'getModels': {
+                const { connection_id } = params;
+                let models = await base44.entities.ModelCatalog.filter({ connection_id });
+                const connections = await base44.entities.APIConnection.filter({ id: connection_id });
+                const conn = connections[0];
+
+                // If no cached models exist, try a live fetch as fallback
+                if (models.length === 0 && conn) {
+                    try {
+                        const apiKey = await decryptAndMigrate(conn, base44);
+                        const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
+                        models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
+                    } catch (_) {
+                        // Live fetch failed — return empty, user can manually refresh
+                    }
+                }
+
+                return Response.json({
+                    models,
+                    provider_type: conn?.provider_type || null,
+                });
+            }
+
+            case 'refreshAllModels': {
+                const allConnections = await base44.entities.APIConnection.list();
+                const results = [];
+                for (const conn of allConnections) {
+                    try {
+                        const apiKey = await decryptString(conn.api_key_encrypted);
+                        const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
+                        const models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
+                        results.push({ id: conn.id, name: conn.name, success: true, model_count: models.length });
+                    } catch (e) {
+                        results.push({ id: conn.id, name: conn.name, success: false, error: e.message });
+                    }
+                }
+                return Response.json({ results });
+            }
+
             case 'getProviders': {
                 const summary = Object.entries(PROVIDERS).map(([key, p]) => ({
                     key,
@@ -525,22 +630,37 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
         models = prov.parseModels(await resp.json());
     }
 
+    const now = new Date().toISOString();
+
     for (const m of models) {
+        // Auto-detect web search support from provider + model name
+        const ws = detectWebSearch(providerKey, m.id);
+
         const existing = await base44.entities.ModelCatalog.filter({
             connection_id: connectionId,
             model_id: m.id,
         });
+
         if (existing.length === 0) {
             await base44.entities.ModelCatalog.create({
                 connection_id: connectionId,
                 model_id: m.id,
                 display_name: m.name,
-                supports_web_search: providerKey === 'perplexity' ? true : null,
-                web_search_options: providerKey === 'perplexity' ? ['builtin'] : [],
-                last_checked_at: providerKey === 'perplexity' ? new Date().toISOString() : null,
+                supports_web_search: ws.supports,
+                web_search_options: ws.options,
+                last_checked_at: now,
             });
         } else {
-            await base44.entities.ModelCatalog.update(existing[0].id, { display_name: m.name });
+            // Preserve manually probed web search if auto-detect returns null
+            const update = {
+                display_name: m.name,
+                last_checked_at: now,
+            };
+            if (ws.supports !== null) {
+                update.supports_web_search = ws.supports;
+                update.web_search_options = ws.options;
+            }
+            await base44.entities.ModelCatalog.update(existing[0].id, update);
         }
     }
 
