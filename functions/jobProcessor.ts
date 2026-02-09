@@ -395,6 +395,55 @@ Return a JSON object with exactly this structure:
                 return Response.json({ jobs });
             }
 
+            case 'rerun': {
+                const { job_id, use_latest_spec } = params;
+                const oldJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!oldJobs.length) return Response.json({ error: 'Original job not found' }, { status: 404 });
+                const oldJob = oldJobs[0];
+
+                let specVersionId = oldJob.spec_version_id;
+                if (use_latest_spec) {
+                    const specs = await base44.entities.Spec.filter({ is_active: true });
+                    if (specs.length) {
+                        const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
+                        if (versions.length) {
+                            versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
+                            specVersionId = versions[0].id;
+                        }
+                    }
+                }
+
+                const oldRows = await base44.entities.JobRow.filter({ job_id });
+                oldRows.sort((a, b) => a.row_index - b.row_index);
+
+                const newJob = await base44.entities.Job.create({
+                    connection_id: oldJob.connection_id,
+                    model_id: oldJob.model_id,
+                    web_search_choice: oldJob.web_search_choice || 'none',
+                    spec_version_id: specVersionId,
+                    status: 'queued',
+                    input_file_url: oldJob.input_file_url,
+                    input_file_name: oldJob.input_file_name,
+                    total_rows: oldJob.total_rows,
+                    processed_rows: 0,
+                    progress_json: { current_batch: 0, last_row_index: 0 },
+                    connection_name: oldJob.connection_name,
+                    model_name: oldJob.model_name,
+                    provider_type: oldJob.provider_type || 'openai_compatible',
+                });
+
+                for (const oldRow of oldRows) {
+                    await base44.entities.JobRow.create({
+                        job_id: newJob.id,
+                        row_index: oldRow.row_index,
+                        input_data: oldRow.input_data,
+                        status: 'pending',
+                    });
+                }
+
+                return Response.json({ job: newJob });
+            }
+
             case 'getRows': {
                 const { job_id } = params;
                 const rows = await base44.entities.JobRow.filter({ job_id });
