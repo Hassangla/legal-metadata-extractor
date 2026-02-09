@@ -61,7 +61,7 @@ const JOB_LOCKS = new Set();
 
 // ── DB-level lock helpers ───────────────────────────────────────
 
-const LOCK_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const LOCK_TTL_MS = 2 * 60 * 1000;
 
 function generateToken() {
     return crypto.randomUUID();
@@ -72,11 +72,10 @@ async function acquireLock(base44, jobId) {
     if (!jobs.length) return null;
     const job = jobs[0];
 
-    // Check existing DB lock
     if (job.processing_lock_token && job.processing_lock_expires_at) {
         const expiresAt = new Date(job.processing_lock_expires_at).getTime();
         if (expiresAt > Date.now()) {
-            return null; // Someone else holds the lock
+            return null;
         }
     }
 
@@ -106,10 +105,31 @@ async function releaseLock(base44, jobId) {
     });
 }
 
+// ── Retry helpers ───────────────────────────────────────────────
+
+const MAX_RETRIES = 3;
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_CAP_MS = 60000;
+
+function isRetryableError(error, httpStatus) {
+    if (httpStatus === 429) return true;
+    if (httpStatus >= 500 && httpStatus <= 599) return true;
+    // Network / fetch errors
+    if (!httpStatus && error) return true;
+    return false;
+}
+
+function computeBackoffMs(retryCount) {
+    const exponential = BACKOFF_BASE_MS * Math.pow(2, retryCount);
+    const capped = Math.min(exponential, BACKOFF_CAP_MS);
+    const jitter = Math.floor(Math.random() * 500);
+    return capped + jitter;
+}
+
 // ── Row processing logic ────────────────────────────────────────
 
 const BATCH_SIZE = 5;
-const TIME_BUDGET_MS = 22000; // 22 seconds to leave headroom
+const TIME_BUDGET_MS = 22000;
 
 async function processRow(row, conn, apiKey, job, specText, economyMap, base44) {
     await base44.entities.JobRow.update(row.id, { status: 'processing' });
@@ -121,28 +141,28 @@ async function processRow(row, conn, apiKey, job, specText, economyMap, base44) 
     const query2 = `${input.Legal_basis || input['Legal basis']} ${input.Economy} legislation database`;
     const query3 = `${input.Topic} ${input.Economy} legal instrument ${input.Question}`;
 
-    const prompt = `You are a legal metadata extraction assistant. Follow this specification exactly:
+    const systemPrompt = `You are a legal metadata extraction assistant. You MUST return ONLY valid JSON with no extra text, no markdown, no code fences. Return a JSON object with exactly two keys: "output" and "evidence".`;
 
+    const userPrompt = `SPEC TEXT (authoritative):
 ${specText}
 
-Extract metadata for this row:
+ROW INPUT:
 - Owner: ${input.Owner}
 - Economy: ${input.Economy}
-- Legal basis: ${input.Legal_basis || input['Legal basis']}
+- Legal_basis: ${input.Legal_basis || input['Legal basis']}
 - Question: ${input.Question}
 - Topic: ${input.Topic}
 
-Search queries to use:
+SEARCH QUERIES TO USE:
 1. ${query1}
 2. ${query2}
 3. ${query3}
 
-Return a JSON object with these exact fields:
+Return JSON with keys "output" and "evidence":
 {
   "output": {
     "Owner": "${input.Owner}",
     "Economy": "${input.Economy}",
-    "Economy_Code": "${economyCode}",
     "Legal_basis": "${input.Legal_basis || input['Legal basis']}",
     "Question": "${input.Question}",
     "Topic": "${input.Topic}",
@@ -150,8 +170,8 @@ Return a JSON object with these exact fields:
     "Instrument_URL": "source URL",
     "Instrument_Date": "YYYY-MM-DD format",
     "Instrument_Type": "type of legal instrument",
-    "Extraction_Status": "success/partial/failed",
-    "Confidence_Score": 0.0-1.0,
+    "Extraction_Status": "success or partial or failed",
+    "Confidence_Score": 0.0,
     "Processing_Notes": "any notes"
   },
   "evidence": {
@@ -166,36 +186,72 @@ Return a JSON object with these exact fields:
     "Extraction_Logic": "reasoning for extraction",
     "Flags": "any flags"
   }
-}`;
+}
+
+No extra text. No markdown. No code fences. ONLY the JSON object.`;
 
     const requestBody = {
         model: job.model_id,
         messages: [
-            { role: 'system', content: 'You are a legal metadata extraction assistant. Always respond with valid JSON.' },
-            { role: 'user', content: prompt }
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
         ],
         max_tokens: 2000,
-        temperature: 0.1
+        temperature: 0,
+        response_format: { type: 'json_object' }
     };
 
+    // Only attach web search tools if the model catalog confirmed support
     if (job.web_search_choice && job.web_search_choice !== 'none') {
+        // We only attach if the probe confirmed this exact tool type
         if (job.web_search_choice === 'web_search') {
             requestBody.tools = [{ type: 'web_search' }];
         }
+        // For other provider-specific options, don't attach tools —
+        // those providers handle it via model capabilities natively
     }
 
-    const response = await fetch(`${conn.base_url}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-    });
+    let response;
+    let httpStatus;
+    try {
+        response = await fetch(`${conn.base_url}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+        });
+        httpStatus = response.status;
+    } catch (fetchError) {
+        // Network error — retryable
+        throw { message: fetchError.message, httpStatus: 0, retryable: true };
+    }
 
     if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`API error: ${response.status} - ${errorText}`);
+        const retryable = isRetryableError(null, httpStatus);
+
+        // If response_format not supported, retry without it
+        if (httpStatus === 400 && errorText.includes('response_format')) {
+            // Fallback: remove response_format and retry once
+            delete requestBody.response_format;
+            const retryResp = await fetch(`${conn.base_url}/v1/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            });
+            if (!retryResp.ok) {
+                const retryText = await retryResp.text();
+                throw { message: `API error: ${retryResp.status} - ${retryText}`, httpStatus: retryResp.status, retryable: isRetryableError(null, retryResp.status) };
+            }
+            response = retryResp;
+        } else {
+            throw { message: `API error: ${httpStatus} - ${errorText}`, httpStatus, retryable };
+        }
     }
 
     const data = await response.json();
@@ -203,34 +259,33 @@ Return a JSON object with these exact fields:
 
     let parsed;
     try {
+        parsed = JSON.parse(content);
+    } catch (e) {
+        // Fallback: try extracting JSON from possible code fences
         const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/) ||
                          content.match(/\{[\s\S]*\}/);
-        const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
-        parsed = JSON.parse(jsonStr.trim());
-    } catch (e) {
-        parsed = {
-            output: {
-                Owner: input.Owner,
-                Economy: input.Economy,
-                Economy_Code: economyCode,
-                Legal_basis: input.Legal_basis || input['Legal basis'],
-                Question: input.Question,
-                Topic: input.Topic,
-                Extraction_Status: 'failed',
-                Confidence_Score: 0,
-                Processing_Notes: 'Failed to parse LLM response'
-            },
-            evidence: {
-                Row_Index: row.row_index,
-                Query_1: query1,
-                Query_2: query2,
-                Query_3: query3,
-                Raw_Evidence: content,
-                Flags: 'PARSE_ERROR'
-            }
-        };
+        if (jsonMatch) {
+            const jsonStr = jsonMatch[1] || jsonMatch[0];
+            parsed = JSON.parse(jsonStr.trim());
+        } else {
+            // Store raw response and mark error
+            await base44.entities.JobRow.update(row.id, {
+                status: 'error',
+                error_message: 'Failed to parse LLM response as JSON',
+                evidence_json: { Row_Index: row.row_index, Raw_Evidence: content, Flags: 'PARSE_ERROR' },
+                retry_count: MAX_RETRIES,
+                last_error_code: 0
+            });
+            return;
+        }
     }
 
+    // Post-process: inject economy code (not from model)
+    if (parsed.output) {
+        parsed.output.Economy_Code = economyCode;
+    }
+
+    // Flag if economy code is missing
     if (!economyCode && parsed.evidence) {
         parsed.evidence.Flags = (parsed.evidence.Flags ? parsed.evidence.Flags + ', ' : '') + 'NO_ECONOMY_CODE';
     }
@@ -238,19 +293,34 @@ Return a JSON object with these exact fields:
     await base44.entities.JobRow.update(row.id, {
         status: 'done',
         output_json: parsed.output || {},
-        evidence_json: parsed.evidence || {}
+        evidence_json: parsed.evidence || {},
+        error_message: ''
     });
 }
 
 /**
+ * Get eligible rows: pending, or retryable errors whose backoff has elapsed.
+ */
+function getEligibleRows(allRows) {
+    const now = Date.now();
+    return allRows.filter(r => {
+        if (r.status === 'pending') return true;
+        if (r.status === 'error') {
+            const retryCount = r.retry_count || 0;
+            if (retryCount >= MAX_RETRIES) return false;
+            const nextRetryAt = r.next_retry_at ? new Date(r.next_retry_at).getTime() : 0;
+            return nextRetryAt <= now;
+        }
+        return false;
+    }).sort((a, b) => a.row_index - b.row_index);
+}
+
+/**
  * Main server-side processing loop.
- * Processes batches within a time budget, updates progress after each batch.
- * Returns when time budget is exhausted or all rows are done.
  */
 async function runProcessingLoop(base44, jobId, lockToken) {
     const startTime = Date.now();
 
-    // Load shared context once
     const jobs = await base44.entities.Job.filter({ id: jobId });
     if (!jobs.length) return;
     const job = jobs[0];
@@ -277,60 +347,89 @@ async function runProcessingLoop(base44, jobId, lockToken) {
     let totalProcessed = job.processed_rows || 0;
     let batchNumber = job.progress_json?.current_batch || 0;
 
-    // Loop batches until time budget exhausted or done
     while (Date.now() - startTime < TIME_BUDGET_MS) {
         const allRows = await base44.entities.JobRow.filter({ job_id: jobId });
-        const pendingRows = allRows
-            .filter(r => r.status === 'pending')
-            .sort((a, b) => a.row_index - b.row_index)
-            .slice(0, BATCH_SIZE);
+        const eligibleRows = getEligibleRows(allRows);
+        const batch = eligibleRows.slice(0, BATCH_SIZE);
 
-        if (pendingRows.length === 0) {
-            // All done
-            await base44.entities.Job.update(jobId, {
-                status: 'done',
-                processed_rows: job.total_rows || totalProcessed
-            });
-            return;
+        if (batch.length === 0) {
+            // Check if truly done or just waiting for retries
+            const stillRetrying = allRows.filter(r =>
+                r.status === 'error' && (r.retry_count || 0) < MAX_RETRIES
+            );
+            if (stillRetrying.length === 0) {
+                const doneCount = allRows.filter(r => r.status === 'done').length;
+                await base44.entities.Job.update(jobId, {
+                    status: 'done',
+                    processed_rows: doneCount
+                });
+                return;
+            }
+            // Rows exist but not yet eligible (backoff pending) — return, frontend will re-kick
+            break;
         }
 
         let batchProcessed = 0;
-        for (const row of pendingRows) {
-            // Check time budget before each row
+        for (const row of batch) {
             if (Date.now() - startTime >= TIME_BUDGET_MS) break;
 
             try {
                 await processRow(row, conn, apiKey, job, specText, economyMap, base44);
                 batchProcessed++;
             } catch (error) {
-                await base44.entities.JobRow.update(row.id, {
-                    status: 'error',
-                    error_message: error.message
-                });
+                const httpStatus = error.httpStatus || 0;
+                const retryable = error.retryable !== undefined ? error.retryable : isRetryableError(error, httpStatus);
+                const retryCount = (row.retry_count || 0) + 1;
+
+                if (retryable && retryCount < MAX_RETRIES) {
+                    const backoffMs = computeBackoffMs(retryCount);
+                    await base44.entities.JobRow.update(row.id, {
+                        status: 'pending',
+                        retry_count: retryCount,
+                        next_retry_at: new Date(Date.now() + backoffMs).toISOString(),
+                        last_error_code: httpStatus,
+                        error_message: error.message || String(error)
+                    });
+                } else {
+                    await base44.entities.JobRow.update(row.id, {
+                        status: 'error',
+                        retry_count: retryCount,
+                        last_error_code: httpStatus,
+                        error_message: error.message || String(error)
+                    });
+                }
             }
         }
 
         totalProcessed += batchProcessed;
         batchNumber++;
 
-        // Refresh lock + update progress
         await refreshLock(base44, jobId, lockToken);
+
+        const latestRows = await base44.entities.JobRow.filter({ job_id: jobId });
+        const doneCount = latestRows.filter(r => r.status === 'done').length;
+
         await base44.entities.Job.update(jobId, {
-            processed_rows: totalProcessed,
+            processed_rows: doneCount,
             progress_json: {
                 current_batch: batchNumber,
-                last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0
+                last_row_index: batch[batch.length - 1]?.row_index || 0
             }
         });
     }
 
-    // Time budget exhausted but rows remain — mark as still running so frontend can re-kick
-    const remainingRows = await base44.entities.JobRow.filter({ job_id: jobId });
-    const pendingLeft = remainingRows.filter(r => r.status === 'pending').length;
-    if (pendingLeft === 0) {
+    // Time budget exhausted — check final state
+    const finalRows = await base44.entities.JobRow.filter({ job_id: jobId });
+    const eligible = getEligibleRows(finalRows);
+    const stillRetrying = finalRows.filter(r =>
+        r.status === 'error' && (r.retry_count || 0) < MAX_RETRIES
+    );
+
+    if (eligible.length === 0 && stillRetrying.length === 0) {
+        const doneCount = finalRows.filter(r => r.status === 'done').length;
         await base44.entities.Job.update(jobId, {
             status: 'done',
-            processed_rows: job.total_rows || totalProcessed
+            processed_rows: doneCount
         });
     }
     // else: status stays 'running', frontend poll will call 'start' again
@@ -402,27 +501,26 @@ Deno.serve(async (req) => {
                             job_id: job.id,
                             row_index: i + 1,
                             input_data: input_rows[i],
-                            status: 'pending'
+                            status: 'pending',
+                            retry_count: 0
                         });
                     }
                 }
 
-                // Auto-start processing: acquire lock and run
-                if (JOB_LOCKS.has(job.id)) {
-                    return Response.json({ job, message: 'Job created, processing already running' });
-                }
-
-                JOB_LOCKS.add(job.id);
-                const lockToken = await acquireLock(base44, job.id);
-                if (lockToken) {
-                    try {
-                        await runProcessingLoop(base44, job.id, lockToken);
-                    } finally {
-                        await releaseLock(base44, job.id);
+                // Auto-start processing
+                if (!JOB_LOCKS.has(job.id)) {
+                    JOB_LOCKS.add(job.id);
+                    const lockToken = await acquireLock(base44, job.id);
+                    if (lockToken) {
+                        try {
+                            await runProcessingLoop(base44, job.id, lockToken);
+                        } finally {
+                            await releaseLock(base44, job.id);
+                            JOB_LOCKS.delete(job.id);
+                        }
+                    } else {
                         JOB_LOCKS.delete(job.id);
                     }
-                } else {
-                    JOB_LOCKS.delete(job.id);
                 }
 
                 const updatedJobs = await base44.entities.Job.filter({ id: job.id });
@@ -432,6 +530,10 @@ Deno.serve(async (req) => {
             case 'start': {
                 const { job_id } = params;
                 
+                if (!job_id) {
+                    return Response.json({ error: 'job_id is required' }, { status: 400 });
+                }
+
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (jobs.length === 0) {
                     return Response.json({ error: 'Job not found' }, { status: 404 });
@@ -442,16 +544,11 @@ Deno.serve(async (req) => {
                 if (job.status === 'done') {
                     return Response.json({ job, message: 'Job already completed' });
                 }
-                if (job.status === 'error') {
-                    return Response.json({ job, message: 'Job has errors' });
-                }
 
-                // In-memory lock check
                 if (JOB_LOCKS.has(job_id)) {
                     return Response.json({ job, message: 'Already processing in this instance' });
                 }
 
-                // DB-level lock check
                 const lockToken = await acquireLock(base44, job_id);
                 if (!lockToken) {
                     return Response.json({ job, message: 'Already processing (locked by another instance)' });
@@ -469,9 +566,104 @@ Deno.serve(async (req) => {
                 return Response.json({ job: updatedJobs[0] });
             }
 
+            case 'rerun': {
+                const { job_id, use_latest_spec } = params;
+
+                if (!job_id) {
+                    return Response.json({ error: 'job_id is required' }, { status: 400 });
+                }
+
+                // Load old job
+                const oldJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!oldJobs.length) {
+                    return Response.json({ error: 'Original job not found' }, { status: 404 });
+                }
+                const oldJob = oldJobs[0];
+
+                // Determine spec version
+                let specVersionId = oldJob.spec_version_id;
+                if (use_latest_spec) {
+                    const specs = await base44.entities.Spec.filter({ is_active: true });
+                    if (specs.length > 0) {
+                        const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
+                        versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
+                        if (versions.length > 0) {
+                            specVersionId = versions[0].id;
+                        }
+                    }
+                }
+
+                // Get old rows for input data
+                const oldRows = await base44.entities.JobRow.filter({ job_id });
+                oldRows.sort((a, b) => a.row_index - b.row_index);
+
+                if (oldRows.length === 0) {
+                    // Fall back to re-parsing input file
+                    const parseResp = await base44.functions.invoke('parseInputFile', { file_url: oldJob.input_file_url });
+                    if (parseResp.rows && parseResp.rows.length > 0) {
+                        oldRows.push(...parseResp.rows.map((r, i) => ({ input_data: r, row_index: i + 1 })));
+                    }
+                }
+
+                const connections = await base44.entities.APIConnection.filter({ id: oldJob.connection_id });
+                const models = await base44.entities.ModelCatalog.filter({ connection_id: oldJob.connection_id, model_id: oldJob.model_id });
+
+                // Create new job
+                const newJob = await base44.entities.Job.create({
+                    connection_id: oldJob.connection_id,
+                    model_id: oldJob.model_id,
+                    web_search_choice: oldJob.web_search_choice || 'none',
+                    spec_version_id: specVersionId,
+                    status: 'queued',
+                    input_file_url: oldJob.input_file_url,
+                    input_file_name: oldJob.input_file_name,
+                    total_rows: oldRows.length,
+                    processed_rows: 0,
+                    progress_json: { current_batch: 0, last_row_index: 0 },
+                    connection_name: connections[0]?.name || oldJob.connection_name || 'Unknown',
+                    model_name: models[0]?.display_name || oldJob.model_name || oldJob.model_id,
+                    processing_lock_token: '',
+                    processing_lock_expires_at: ''
+                });
+
+                // Create new rows
+                for (const row of oldRows) {
+                    await base44.entities.JobRow.create({
+                        job_id: newJob.id,
+                        row_index: row.row_index,
+                        input_data: row.input_data,
+                        status: 'pending',
+                        retry_count: 0
+                    });
+                }
+
+                // Auto-start
+                if (!JOB_LOCKS.has(newJob.id)) {
+                    JOB_LOCKS.add(newJob.id);
+                    const lockToken = await acquireLock(base44, newJob.id);
+                    if (lockToken) {
+                        try {
+                            await runProcessingLoop(base44, newJob.id, lockToken);
+                        } finally {
+                            await releaseLock(base44, newJob.id);
+                            JOB_LOCKS.delete(newJob.id);
+                        }
+                    } else {
+                        JOB_LOCKS.delete(newJob.id);
+                    }
+                }
+
+                const updatedJobs = await base44.entities.Job.filter({ id: newJob.id });
+                return Response.json({ job: updatedJobs[0] || newJob });
+            }
+
             case 'getStatus': {
                 const { job_id } = params;
                 
+                if (!job_id) {
+                    return Response.json({ error: 'job_id is required' }, { status: 400 });
+                }
+
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (jobs.length === 0) {
                     return Response.json({ error: 'Job not found' }, { status: 404 });
@@ -498,6 +690,9 @@ Deno.serve(async (req) => {
             
             case 'getRows': {
                 const { job_id } = params;
+                if (!job_id) {
+                    return Response.json({ error: 'job_id is required' }, { status: 400 });
+                }
                 const rows = await base44.entities.JobRow.filter({ job_id });
                 rows.sort((a, b) => a.row_index - b.row_index);
                 return Response.json({ rows });

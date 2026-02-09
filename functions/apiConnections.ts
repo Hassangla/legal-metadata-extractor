@@ -30,7 +30,6 @@ async function encryptString(plaintext) {
 }
 
 async function decryptString(ciphertext) {
-    // Legacy fallback: if no "." separator, treat as old base64-only value
     if (!ciphertext.includes(".")) {
         try {
             return atob(ciphertext);
@@ -48,19 +47,12 @@ async function decryptString(ciphertext) {
     return new TextDecoder().decode(plainBuf);
 }
 
-/**
- * Decrypt and auto-migrate legacy keys to AES-GCM format.
- * Returns the plaintext API key.
- */
 async function decryptAndMigrate(conn, base44) {
     const plaintext = await decryptString(conn.api_key_encrypted);
-
-    // If it was legacy (no dot), re-encrypt and persist
     if (!conn.api_key_encrypted.includes(".")) {
         const encrypted = await encryptString(plaintext);
         await base44.entities.APIConnection.update(conn.id, { api_key_encrypted: encrypted });
     }
-
     return plaintext;
 }
 
@@ -248,6 +240,7 @@ Deno.serve(async (req) => {
                 let supportsWebSearch = false;
                 let webSearchOptions = [];
                 
+                // FIX 8: Only detect via actual API probe, no URL heuristics
                 try {
                     const testResponse = await fetch(`${conn.base_url}/v1/chat/completions`, {
                         method: 'POST',
@@ -266,19 +259,19 @@ Deno.serve(async (req) => {
                     if (testResponse.ok) {
                         supportsWebSearch = true;
                         webSearchOptions.push('web_search');
+                    } else {
+                        // Check if it's a tool-not-supported error vs auth error
+                        const errorBody = await testResponse.text();
+                        // If it's a 400/422 about tools, web search is not supported
+                        // If it's a 401/403, don't update support status
+                        if (testResponse.status === 401 || testResponse.status === 403) {
+                            return Response.json({ error: 'Authentication failed during probe' }, { status: 401 });
+                        }
+                        // Any other status means tools not supported
+                        supportsWebSearch = false;
                     }
                 } catch (e) {
-                    // Tool not supported in this format
-                }
-                
-                if (conn.base_url.includes('openrouter')) {
-                    supportsWebSearch = true;
-                    webSearchOptions = ['openrouter_web_search'];
-                }
-                
-                if (conn.base_url.includes('perplexity') || model_id.includes('sonar')) {
-                    supportsWebSearch = true;
-                    webSearchOptions = ['perplexity_online'];
+                    supportsWebSearch = false;
                 }
                 
                 const existing = await base44.entities.ModelCatalog.filter({ 

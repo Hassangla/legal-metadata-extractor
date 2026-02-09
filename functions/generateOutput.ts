@@ -1,6 +1,18 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 import * as XLSX from 'npm:xlsx@0.18.5';
 
+// Chunked base64 conversion to avoid stack overflow on large files
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const CHUNK_SIZE = 32768;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+        const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return btoa(binary);
+}
+
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
@@ -11,8 +23,12 @@ Deno.serve(async (req) => {
         }
 
         const { job_id } = await req.json();
+
+        // FIX 10: null guard
+        if (!job_id) {
+            return Response.json({ error: 'job_id is required' }, { status: 400 });
+        }
         
-        // Get job
         const jobs = await base44.entities.Job.filter({ id: job_id });
         if (jobs.length === 0) {
             return Response.json({ error: 'Job not found' }, { status: 404 });
@@ -20,11 +36,9 @@ Deno.serve(async (req) => {
         
         const job = jobs[0];
         
-        // Get all job rows
         const rows = await base44.entities.JobRow.filter({ job_id });
         rows.sort((a, b) => a.row_index - b.row_index);
         
-        // Prepare Output sheet data
         const outputData = rows.map(row => {
             const output = row.output_json || {};
             return {
@@ -44,7 +58,6 @@ Deno.serve(async (req) => {
             };
         });
         
-        // Prepare Evidence sheet data
         const evidenceData = rows.map(row => {
             const evidence = row.evidence_json || {};
             return {
@@ -61,31 +74,26 @@ Deno.serve(async (req) => {
             };
         });
         
-        // Create workbook
         const wb = XLSX.utils.book_new();
         
-        // Add Output sheet
         const wsOutput = XLSX.utils.json_to_sheet(outputData);
         XLSX.utils.book_append_sheet(wb, wsOutput, 'Output');
         
-        // Add Evidence sheet
         const wsEvidence = XLSX.utils.json_to_sheet(evidenceData);
         XLSX.utils.book_append_sheet(wb, wsEvidence, 'Evidence');
         
-        // Generate buffer
         const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         
-        // Convert to base64
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        // FIX 10: safe chunked base64 conversion
+        const base64Data = arrayBufferToBase64(buffer);
         
-        // Create filename
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const filename = `legal_metadata_output_${timestamp}.xlsx`;
         
         return Response.json({ 
             success: true,
             filename,
-            data: base64,
+            data: base64Data,
             mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
         
