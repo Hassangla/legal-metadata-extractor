@@ -1,5 +1,60 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
+// ── AES-256-GCM crypto helpers ──────────────────────────────────
+
+function getEncryptionKey() {
+    const key = Deno.env.get("ENCRYPTION_KEY");
+    if (!key) {
+        throw new Error("ENCRYPTION_KEY environment variable is not set. Cannot decrypt API keys.");
+    }
+    return key;
+}
+
+async function deriveKey(secret) {
+    const enc = new TextEncoder();
+    const hash = await crypto.subtle.digest("SHA-256", enc.encode(secret));
+    return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptString(plaintext) {
+    const secret = getEncryptionKey();
+    const key = await deriveKey(secret);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const cipherBytes = new Uint8Array(
+        await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext))
+    );
+    const ivB64 = btoa(String.fromCharCode(...iv));
+    const cipherB64 = btoa(String.fromCharCode(...cipherBytes));
+    return `${ivB64}.${cipherB64}`;
+}
+
+async function decryptString(ciphertext) {
+    if (!ciphertext.includes(".")) {
+        try {
+            return atob(ciphertext);
+        } catch {
+            throw new Error("Failed to decrypt API key (invalid legacy format)");
+        }
+    }
+    const secret = getEncryptionKey();
+    const key = await deriveKey(secret);
+    const [ivB64, cipherB64] = ciphertext.split(".");
+    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const cipherBytes = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
+    const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipherBytes);
+    return new TextDecoder().decode(plainBuf);
+}
+
+async function decryptAndMigrate(conn, base44) {
+    const plaintext = await decryptString(conn.api_key_encrypted);
+    if (!conn.api_key_encrypted.includes(".")) {
+        const encrypted = await encryptString(plaintext);
+        await base44.entities.APIConnection.update(conn.id, { api_key_encrypted: encrypted });
+    }
+    return plaintext;
+}
+
 const BATCH_SIZE = 5;
 
 Deno.serve(async (req) => {

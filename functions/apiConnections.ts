@@ -1,5 +1,71 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
+// ── AES-256-GCM crypto helpers ──────────────────────────────────
+
+function getEncryptionKey() {
+    const key = Deno.env.get("ENCRYPTION_KEY");
+    if (!key) {
+        throw new Error("ENCRYPTION_KEY environment variable is not set. Cannot encrypt/decrypt API keys.");
+    }
+    return key;
+}
+
+async function deriveKey(secret) {
+    const enc = new TextEncoder();
+    const hash = await crypto.subtle.digest("SHA-256", enc.encode(secret));
+    return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptString(plaintext) {
+    const secret = getEncryptionKey();
+    const key = await deriveKey(secret);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const cipherBytes = new Uint8Array(
+        await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext))
+    );
+    const ivB64 = btoa(String.fromCharCode(...iv));
+    const cipherB64 = btoa(String.fromCharCode(...cipherBytes));
+    return `${ivB64}.${cipherB64}`;
+}
+
+async function decryptString(ciphertext) {
+    // Legacy fallback: if no "." separator, treat as old base64-only value
+    if (!ciphertext.includes(".")) {
+        try {
+            return atob(ciphertext);
+        } catch {
+            throw new Error("Failed to decrypt API key (invalid legacy format)");
+        }
+    }
+
+    const secret = getEncryptionKey();
+    const key = await deriveKey(secret);
+    const [ivB64, cipherB64] = ciphertext.split(".");
+    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const cipherBytes = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
+    const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipherBytes);
+    return new TextDecoder().decode(plainBuf);
+}
+
+/**
+ * Decrypt and auto-migrate legacy keys to AES-GCM format.
+ * Returns the plaintext API key.
+ */
+async function decryptAndMigrate(conn, base44) {
+    const plaintext = await decryptString(conn.api_key_encrypted);
+
+    // If it was legacy (no dot), re-encrypt and persist
+    if (!conn.api_key_encrypted.includes(".")) {
+        const encrypted = await encryptString(plaintext);
+        await base44.entities.APIConnection.update(conn.id, { api_key_encrypted: encrypted });
+    }
+
+    return plaintext;
+}
+
+// ── Main handler ────────────────────────────────────────────────
+
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
@@ -15,13 +81,11 @@ Deno.serve(async (req) => {
             case 'create': {
                 const { name, base_url, api_key } = params;
                 
-                // Simple XOR encryption for API key (in production, use proper encryption)
-                const encryptionKey = Deno.env.get("ENCRYPTION_KEY") || "default-key-change-me";
-                const encrypted = btoa(api_key); // Base64 encode for now
+                const encrypted = await encryptString(api_key);
                 
                 const connection = await base44.entities.APIConnection.create({
                     name,
-                    base_url: base_url.replace(/\/$/, ''), // Remove trailing slash
+                    base_url: base_url.replace(/\/$/, ''),
                     api_key_encrypted: encrypted,
                     is_valid: false
                 });
@@ -46,13 +110,12 @@ Deno.serve(async (req) => {
                     const conn = connections[0];
                     baseUrl = conn.base_url;
                     if (!apiKey) {
-                        apiKey = atob(conn.api_key_encrypted);
+                        apiKey = await decryptAndMigrate(conn, base44);
                     }
                 } else {
                     baseUrl = params.base_url?.replace(/\/$/, '');
                 }
                 
-                // Test connection by fetching models
                 const response = await fetch(`${baseUrl}/v1/models`, {
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
@@ -85,7 +148,6 @@ Deno.serve(async (req) => {
             
             case 'list': {
                 const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
-                // Remove encrypted keys from response
                 const safeConnections = connections.map(c => ({
                     ...c,
                     api_key_encrypted: undefined,
@@ -109,7 +171,7 @@ Deno.serve(async (req) => {
                 }
                 
                 const conn = connections[0];
-                const apiKey = atob(conn.api_key_encrypted);
+                const apiKey = await decryptAndMigrate(conn, base44);
                 
                 const response = await fetch(`${conn.base_url}/v1/models`, {
                     headers: {
@@ -125,7 +187,6 @@ Deno.serve(async (req) => {
                 const data = await response.json();
                 const models = data.data || data.models || [];
                 
-                // Store/update models in catalog
                 for (const model of models) {
                     const modelId = model.id || model.name;
                     const existing = await base44.entities.ModelCatalog.filter({ 
@@ -138,14 +199,13 @@ Deno.serve(async (req) => {
                             connection_id,
                             model_id: modelId,
                             display_name: model.name || model.id,
-                            supports_web_search: null, // Unknown until probed
+                            supports_web_search: null,
                             web_search_options: [],
                             last_checked_at: null
                         });
                     }
                 }
                 
-                // Fetch updated catalog
                 const catalog = await base44.entities.ModelCatalog.filter({ connection_id });
                 
                 return Response.json({ models: catalog });
@@ -160,13 +220,11 @@ Deno.serve(async (req) => {
                 }
                 
                 const conn = connections[0];
-                const apiKey = atob(conn.api_key_encrypted);
+                const apiKey = await decryptAndMigrate(conn, base44);
                 
-                // Try to probe web search capability
                 let supportsWebSearch = false;
                 let webSearchOptions = [];
                 
-                // Try OpenAI-style tool calling with web search
                 try {
                     const testResponse = await fetch(`${conn.base_url}/v1/chat/completions`, {
                         method: 'POST',
@@ -190,19 +248,16 @@ Deno.serve(async (req) => {
                     // Tool not supported in this format
                 }
                 
-                // Check for OpenRouter-style web search
                 if (conn.base_url.includes('openrouter')) {
                     supportsWebSearch = true;
                     webSearchOptions = ['openrouter_web_search'];
                 }
                 
-                // Check for Perplexity-style
                 if (conn.base_url.includes('perplexity') || model_id.includes('sonar')) {
                     supportsWebSearch = true;
                     webSearchOptions = ['perplexity_online'];
                 }
                 
-                // Update model catalog
                 const existing = await base44.entities.ModelCatalog.filter({ 
                     connection_id, 
                     model_id 
