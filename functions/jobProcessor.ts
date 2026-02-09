@@ -1,467 +1,181 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
-// ── AES-256-GCM crypto helpers ──────────────────────────────────
+const BATCH_SIZE = 5;
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 2000;
+
+// ── PROVIDER CHAT CONFIGS ───────────────────────────────────
+
+const CHAT_CONFIGS = {
+    openai:           { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    openrouter:       { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    groq:             { chatUrl: (b) => `${b}/openai/v1/chat/completions`,   authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    together:         { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    mistral:          { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    perplexity:       { chatUrl: (b) => `${b}/chat/completions`,             authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    openai_compatible:{ chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    azure_openai:     { chatUrl: (b, m) => `${b}/openai/deployments/${m}/chat/completions?api-version=2024-10-21`, authHeaders: (k) => ({ 'api-key': k, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    anthropic:        { chatUrl: (b) => `${b}/v1/messages`,                  authHeaders: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }), chatFormat: 'anthropic' },
+    google:           { chatUrl: (b, m) => `${b}/v1beta/models/${m}:generateContent`, authHeaders: (_) => ({ 'Content-Type': 'application/json' }), chatFormat: 'google' },
+};
+
+// ── ENCRYPTION ──────────────────────────────────────────────
 
 function getEncryptionKey() {
     const key = Deno.env.get("ENCRYPTION_KEY");
-    if (!key) {
-        throw new Error("ENCRYPTION_KEY environment variable is not set. Cannot decrypt API keys.");
-    }
+    if (!key) throw new Error("ENCRYPTION_KEY not set");
     return key;
 }
 
 async function deriveKey(secret) {
-    const enc = new TextEncoder();
-    const hash = await crypto.subtle.digest("SHA-256", enc.encode(secret));
+    const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
     return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
-async function encryptString(plaintext) {
-    const secret = getEncryptionKey();
-    const key = await deriveKey(secret);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const enc = new TextEncoder();
-    const cipherBytes = new Uint8Array(
-        await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext))
-    );
-    const ivB64 = btoa(String.fromCharCode(...iv));
-    const cipherB64 = btoa(String.fromCharCode(...cipherBytes));
-    return `${ivB64}.${cipherB64}`;
-}
-
 async function decryptString(ciphertext) {
-    if (!ciphertext.includes(".")) {
-        try {
-            return atob(ciphertext);
-        } catch {
-            throw new Error("Failed to decrypt API key (invalid legacy format)");
-        }
-    }
-    const secret = getEncryptionKey();
-    const key = await deriveKey(secret);
+    if (!ciphertext.includes(".")) { try { return atob(ciphertext); } catch { throw new Error("Invalid key format"); } }
+    const key = await deriveKey(getEncryptionKey());
     const [ivB64, cipherB64] = ciphertext.split(".");
-    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const iv          = Uint8Array.from(atob(ivB64),     c => c.charCodeAt(0));
     const cipherBytes = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
-    const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipherBytes);
-    return new TextDecoder().decode(plainBuf);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipherBytes));
 }
 
-async function decryptAndMigrate(conn, base44) {
-    const plaintext = await decryptString(conn.api_key_encrypted);
-    if (!conn.api_key_encrypted.includes(".")) {
-        const encrypted = await encryptString(plaintext);
-        await base44.entities.APIConnection.update(conn.id, { api_key_encrypted: encrypted });
-    }
-    return plaintext;
-}
+// ── BUILD LLM REQUEST (provider-specific) ───────────────────
 
-// ── In-memory lock (single-instance guard) ──────────────────────
+function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSearchChoice, baseUrl, apiKey) {
+    const cfg = CHAT_CONFIGS[providerType] || CHAT_CONFIGS.openai_compatible;
 
-const JOB_LOCKS = new Set();
-
-// ── DB-level lock helpers ───────────────────────────────────────
-
-const LOCK_TTL_MS = 2 * 60 * 1000; // 2 minutes
-
-function generateToken() {
-    return crypto.randomUUID();
-}
-
-async function acquireLock(base44, jobId) {
-    const jobs = await base44.entities.Job.filter({ id: jobId });
-    if (!jobs.length) return null;
-    const job = jobs[0];
-
-    if (job.processing_lock_token && job.processing_lock_expires_at) {
-        const expiresAt = new Date(job.processing_lock_expires_at).getTime();
-        if (expiresAt > Date.now()) {
-            return null;
+    if (cfg.chatFormat === 'anthropic') {
+        const body = {
+            model: modelId,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+            max_tokens: 4096,
+            temperature: 0,
+        };
+        if (webSearchChoice === 'web_search') {
+            body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
         }
+        return {
+            url: cfg.chatUrl(baseUrl, modelId),
+            init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
+        };
     }
 
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + LOCK_TTL_MS).toISOString();
+    if (cfg.chatFormat === 'google') {
+        const body = {
+            contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+            generationConfig: { temperature: 0, maxOutputTokens: 4096 },
+        };
+        if (webSearchChoice === 'google_search') {
+            body.tools = [{ googleSearch: {} }];
+        }
+        const url = `${cfg.chatUrl(baseUrl, modelId)}?key=${apiKey}`;
+        return {
+            url,
+            init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        };
+    }
 
-    await base44.entities.Job.update(jobId, {
-        processing_lock_token: token,
-        processing_lock_expires_at: expiresAt
-    });
-
-    return token;
-}
-
-async function refreshLock(base44, jobId, token) {
-    const expiresAt = new Date(Date.now() + LOCK_TTL_MS).toISOString();
-    await base44.entities.Job.update(jobId, {
-        processing_lock_token: token,
-        processing_lock_expires_at: expiresAt
-    });
-}
-
-async function releaseLock(base44, jobId) {
-    await base44.entities.Job.update(jobId, {
-        processing_lock_token: '',
-        processing_lock_expires_at: ''
-    });
-}
-
-// ── Retry helpers (Fix 6) ───────────────────────────────────────
-
-const MAX_RETRIES = 3;
-const BACKOFF_BASE_MS = 1000;
-const BACKOFF_CAP_MS = 60000;
-
-function isRetryableError(error, httpStatus) {
-    if (httpStatus === 429) return true;
-    if (httpStatus >= 500 && httpStatus <= 599) return true;
-    // Network/fetch errors (no HTTP status)
-    if (!httpStatus && error) return true;
-    return false;
-}
-
-function computeBackoffMs(retryCount) {
-    const exponential = BACKOFF_BASE_MS * Math.pow(2, retryCount);
-    const capped = Math.min(exponential, BACKOFF_CAP_MS);
-    const jitter = Math.random() * 500;
-    return capped + jitter;
-}
-
-// ── Row processing logic ────────────────────────────────────────
-
-const BATCH_SIZE = 5;
-const TIME_BUDGET_MS = 22000;
-
-async function processRow(row, conn, apiKey, job, specText, economyMap, base44) {
-    await base44.entities.JobRow.update(row.id, { status: 'processing' });
-
-    const input = row.input_data;
-    const legalBasis = input.Legal_basis || input['Legal basis'] || '';
-    const economy = input.Economy || '';
-    const owner = input.Owner || '';
-    const question = input.Question || '';
-    const topic = input.Topic || '';
-
-    const query1 = `${legalBasis} ${economy} official text`;
-    const query2 = `${legalBasis} ${economy} legislation database`;
-    const query3 = `${topic} ${economy} legal instrument ${question}`;
-
-    // Fix 7: Structured prompt — no Economy_Code in prompt, no markdown fences expected
-    const systemPrompt = `You are a legal metadata extraction assistant. You MUST respond with ONLY a valid JSON object. No markdown, no code fences, no extra text.`;
-
-    const userPrompt = `SPEC TEXT (authoritative):
-${specText}
-
-ROW INPUT:
-- Owner: ${owner}
-- Economy: ${economy}
-- Legal basis: ${legalBasis}
-- Question: ${question}
-- Topic: ${topic}
-
-SEARCH QUERIES TO USE:
-1. ${query1}
-2. ${query2}
-3. ${query3}
-
-Return a JSON object with exactly two keys: "output" and "evidence".
-
-"output" must contain:
-{
-  "Owner": "${owner}",
-  "Economy": "${economy}",
-  "Legal_basis": "${legalBasis}",
-  "Question": "${question}",
-  "Topic": "${topic}",
-  "Instrument_Title": "extracted title or empty string",
-  "Instrument_URL": "source URL or empty string",
-  "Instrument_Date": "YYYY-MM-DD or empty string",
-  "Instrument_Type": "type of legal instrument or empty string",
-  "Extraction_Status": "success or partial or failed",
-  "Confidence_Score": 0.0,
-  "Processing_Notes": "any notes"
-}
-
-"evidence" must contain:
-{
-  "Row_Index": ${row.row_index},
-  "Query_1": "${query1}",
-  "Query_2": "${query2}",
-  "Query_3": "${query3}",
-  "URLs_Considered": "list of URLs checked",
-  "Selected_Source_URLs": "chosen source URLs",
-  "Tier": "1-4",
-  "Raw_Evidence": "raw extracted text",
-  "Extraction_Logic": "reasoning for extraction",
-  "Flags": "any flags"
-}
-
-IMPORTANT: Do NOT include Economy_Code in the output — it will be added in post-processing. Return ONLY the JSON object.`;
-
-    const requestBody = {
-        model: job.model_id,
+    // OpenAI / OpenAI-compatible (default)
+    const body = {
+        model: modelId,
         messages: [
             { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
+            { role: 'user', content: userPrompt },
         ],
-        max_tokens: 2000,
+        max_tokens: 4096,
         temperature: 0,
-        response_format: { type: "json_object" }
+        response_format: { type: 'json_object' },
     };
-
-    // Fix 8: Only attach web search tools if the model's catalog confirms support
-    if (job.web_search_choice && job.web_search_choice !== 'none') {
-        // The web_search_choice was set only if probeWebSearch confirmed support
-        if (job.web_search_choice === 'web_search') {
-            requestBody.tools = [{ type: 'web_search' }];
-        }
-        // Other provider-specific formats can be added here
+    if (webSearchChoice && webSearchChoice !== 'none' && webSearchChoice !== 'builtin') {
+        body.tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }];
     }
-
-    const response = await fetch(`${conn.base_url}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        const err = new Error(`API error: ${response.status} - ${errorText}`);
-        err.httpStatus = response.status;
-        throw err;
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
-
-    // Fix 7: Direct JSON parse — no regex scraping
-    let parsed;
-    try {
-        parsed = JSON.parse(content);
-    } catch (e) {
-        // If response_format was ignored and we got non-JSON, store raw and error
-        const retryCount = (row.retry_count || 0);
-        await base44.entities.JobRow.update(row.id, {
-            status: 'error',
-            error_message: 'Failed to parse JSON from LLM response',
-            evidence_json: {
-                Row_Index: row.row_index,
-                Query_1: query1,
-                Query_2: query2,
-                Query_3: query3,
-                Raw_Evidence: content.substring(0, 5000),
-                Flags: 'PARSE_ERROR'
-            },
-            retry_count: retryCount + 1
-        });
-        return; // Don't throw — this is a non-retryable parse failure
-    }
-
-    // Fix 7: Post-process Economy_Code injection
-    const economyCode = economyMap[economy?.toLowerCase()?.trim()] || '';
-    if (parsed.output) {
-        parsed.output.Economy_Code = economyCode;
-    }
-
-    if (!economyCode && parsed.evidence) {
-        parsed.evidence.Flags = (parsed.evidence.Flags ? parsed.evidence.Flags + ', ' : '') + 'NO_ECONOMY_CODE';
-    }
-
-    await base44.entities.JobRow.update(row.id, {
-        status: 'done',
-        output_json: parsed.output || {},
-        evidence_json: parsed.evidence || {},
-        error_message: '',
-        last_error_code: null
-    });
+    return {
+        url: cfg.chatUrl(baseUrl, modelId),
+        init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
+    };
 }
 
-/**
- * Get eligible rows: pending, or error rows eligible for retry
- */
-function getEligibleRows(allRows, batchSize) {
-    const now = Date.now();
-    return allRows
-        .filter(r => {
-            if (r.status === 'pending') return true;
-            if (r.status === 'error' && (r.retry_count || 0) < MAX_RETRIES) {
-                if (!r.next_retry_at) return true;
-                return new Date(r.next_retry_at).getTime() <= now;
-            }
-            return false;
-        })
-        .sort((a, b) => a.row_index - b.row_index)
-        .slice(0, batchSize);
+// ── PARSE LLM RESPONSE ─────────────────────────────────────
+
+function extractTextContent(providerType, data) {
+    const cfg = CHAT_CONFIGS[providerType] || CHAT_CONFIGS.openai_compatible;
+
+    if (cfg.chatFormat === 'anthropic') {
+        return (data.content || [])
+            .filter((b) => b.type === 'text')
+            .map((b) => b.text)
+            .join('\n');
+    }
+    if (cfg.chatFormat === 'google') {
+        return data.candidates?.[0]?.content?.parts
+            ?.map((p) => p.text || '')
+            .join('\n') || '';
+    }
+    return data.choices?.[0]?.message?.content || '';
 }
 
-/**
- * Main server-side processing loop.
- */
-async function runProcessingLoop(base44, jobId, lockToken) {
-    const startTime = Date.now();
+// ── RETRY WITH BACKOFF ──────────────────────────────────────
 
-    const jobs = await base44.entities.Job.filter({ id: jobId });
-    if (!jobs.length) return;
-    const job = jobs[0];
-
-    const connections = await base44.entities.APIConnection.filter({ id: job.connection_id });
-    if (!connections.length) {
-        await base44.entities.Job.update(jobId, { status: 'error', error_message: 'API connection not found' });
-        return;
-    }
-    const conn = connections[0];
-    const apiKey = await decryptAndMigrate(conn, base44);
-
-    const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
-    const specText = specVersions[0]?.spec_text || '';
-
-    const economyCodes = await base44.entities.EconomyCode.list();
-    const economyMap = {};
-    economyCodes.forEach(ec => {
-        economyMap[ec.economy.toLowerCase().trim()] = ec.economy_code;
-    });
-
-    await base44.entities.Job.update(jobId, { status: 'running' });
-
-    let totalProcessed = job.processed_rows || 0;
-    let batchNumber = job.progress_json?.current_batch || 0;
-
-    while (Date.now() - startTime < TIME_BUDGET_MS) {
-        const allRows = await base44.entities.JobRow.filter({ job_id: jobId });
-        const eligibleRows = getEligibleRows(allRows, BATCH_SIZE);
-
-        if (eligibleRows.length === 0) {
-            // Check if there are rows that are retryable but not yet eligible (waiting for backoff)
-            const waitingForRetry = allRows.filter(r =>
-                r.status === 'error' && (r.retry_count || 0) < MAX_RETRIES && r.next_retry_at &&
-                new Date(r.next_retry_at).getTime() > Date.now()
-            );
-
-            if (waitingForRetry.length === 0) {
-                // Truly done
-                const doneCount = allRows.filter(r => r.status === 'done').length;
-                await base44.entities.Job.update(jobId, {
-                    status: 'done',
-                    processed_rows: doneCount
-                });
-                return;
-            }
-            // Some rows waiting for backoff — break and let next kick continue
-            break;
-        }
-
-        let batchProcessed = 0;
-        for (const row of eligibleRows) {
-            if (Date.now() - startTime >= TIME_BUDGET_MS) break;
-
-            try {
-                await processRow(row, conn, apiKey, job, specText, economyMap, base44);
-                batchProcessed++;
-            } catch (error) {
-                const httpStatus = error.httpStatus || null;
-                const retryCount = (row.retry_count || 0);
-
-                if (isRetryableError(error, httpStatus) && retryCount < MAX_RETRIES) {
-                    const backoffMs = computeBackoffMs(retryCount);
-                    const nextRetryAt = new Date(Date.now() + backoffMs).toISOString();
-                    await base44.entities.JobRow.update(row.id, {
-                        status: 'pending',
-                        retry_count: retryCount + 1,
-                        next_retry_at: nextRetryAt,
-                        last_error_code: httpStatus,
-                        error_message: error.message
-                    });
-                } else {
-                    await base44.entities.JobRow.update(row.id, {
-                        status: 'error',
-                        error_message: error.message,
-                        last_error_code: httpStatus,
-                        retry_count: retryCount + 1
-                    });
-                }
+async function fetchWithRetry(url, init, retries) {
+    retries = retries || MAX_RETRIES;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const resp = await fetch(url, init);
+        if (resp.ok) return resp;
+        if (resp.status === 429 || resp.status >= 500) {
+            if (attempt < retries) {
+                const delay = RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
             }
         }
-
-        totalProcessed += batchProcessed;
-        batchNumber++;
-
-        await refreshLock(base44, jobId, lockToken);
-
-        // Recount done rows for accurate progress
-        const updatedRows = await base44.entities.JobRow.filter({ job_id: jobId });
-        const doneCount = updatedRows.filter(r => r.status === 'done').length;
-
-        await base44.entities.Job.update(jobId, {
-            processed_rows: doneCount,
-            progress_json: {
-                current_batch: batchNumber,
-                last_row_index: eligibleRows[eligibleRows.length - 1]?.row_index || 0
-            }
-        });
+        const errText = await resp.text();
+        throw new Error(`API ${resp.status}: ${errText.slice(0, 300)}`);
     }
-
-    // Time budget exhausted — check final state
-    const finalRows = await base44.entities.JobRow.filter({ job_id: jobId });
-    const pendingLeft = finalRows.filter(r => r.status === 'pending').length;
-    const retryableLeft = finalRows.filter(r =>
-        r.status === 'error' && (r.retry_count || 0) < MAX_RETRIES
-    ).length;
-
-    if (pendingLeft === 0 && retryableLeft === 0) {
-        const doneCount = finalRows.filter(r => r.status === 'done').length;
-        await base44.entities.Job.update(jobId, {
-            status: 'done',
-            processed_rows: doneCount
-        });
-    }
-    // else: status stays 'running', frontend poll will call 'start' again
+    throw new Error('Exhausted retries');
 }
 
-// ── Main handler ────────────────────────────────────────────────
+// ── JSON EXTRACTION ─────────────────────────────────────────
+
+function extractJSON(content) {
+    try { return JSON.parse(content.trim()); } catch (_) {}
+    const fenceMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) try { return JSON.parse(fenceMatch[1].trim()); } catch (_) {}
+    const braceMatch = content.match(/\{[\s\S]*\}/);
+    if (braceMatch) try { return JSON.parse(braceMatch[0].trim()); } catch (_) {}
+    return null;
+}
+
+// ── MAIN HANDLER ────────────────────────────────────────────
 
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
         const user = await base44.auth.me();
-        
-        if (!user) {
-            return Response.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
         const { action, ...params } = await req.json();
 
         switch (action) {
+
             case 'create': {
-                const { 
-                    connection_id, 
-                    model_id, 
-                    web_search_choice, 
-                    input_file_url,
-                    input_file_name,
-                    total_rows,
-                    input_rows 
-                } = params;
-                
+                const { connection_id, model_id, web_search_choice, input_file_url, input_file_name, total_rows, input_rows } = params;
+
                 const specs = await base44.entities.Spec.filter({ is_active: true });
-                if (specs.length === 0) {
-                    return Response.json({ error: 'No active spec found. Please set up the spec first.' }, { status: 400 });
-                }
-                
+                if (!specs.length) return Response.json({ error: 'No active spec. Configure the spec first.' }, { status: 400 });
+
                 const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
-                if (versions.length === 0) {
-                    return Response.json({ error: 'No spec version found.' }, { status: 400 });
-                }
+                if (!versions.length) return Response.json({ error: 'No spec version found.' }, { status: 400 });
                 versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
                 const latestVersion = versions[0];
-                
+
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
-                const connection = connections[0];
-                
+                const conn = connections[0];
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 const model = models[0];
-                
+
                 const job = await base44.entities.Job.create({
                     connection_id,
                     model_id,
@@ -473,196 +187,223 @@ Deno.serve(async (req) => {
                     total_rows: total_rows || 0,
                     processed_rows: 0,
                     progress_json: { current_batch: 0, last_row_index: 0 },
-                    connection_name: connection?.name || 'Unknown',
+                    connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
-                    processing_lock_token: '',
-                    processing_lock_expires_at: ''
+                    provider_type: conn?.provider_type || 'openai_compatible',
                 });
-                
-                if (input_rows && input_rows.length > 0) {
+
+                if (input_rows?.length) {
                     for (let i = 0; i < input_rows.length; i++) {
                         await base44.entities.JobRow.create({
                             job_id: job.id,
                             row_index: i + 1,
                             input_data: input_rows[i],
                             status: 'pending',
-                            retry_count: 0
                         });
                     }
                 }
 
-                // Auto-start processing
-                if (!JOB_LOCKS.has(job.id)) {
-                    JOB_LOCKS.add(job.id);
-                    const lockToken = await acquireLock(base44, job.id);
-                    if (lockToken) {
-                        try {
-                            await runProcessingLoop(base44, job.id, lockToken);
-                        } finally {
-                            await releaseLock(base44, job.id);
-                            JOB_LOCKS.delete(job.id);
-                        }
-                    } else {
-                        JOB_LOCKS.delete(job.id);
-                    }
-                }
-
-                const updatedJobs = await base44.entities.Job.filter({ id: job.id });
-                return Response.json({ job: updatedJobs[0] || job });
+                return Response.json({ job });
             }
-            
-            case 'start': {
+
+            case 'process': {
                 const { job_id } = params;
-                if (!job_id) return Response.json({ error: 'job_id required' }, { status: 400 });
-                
                 const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (jobs.length === 0) {
-                    return Response.json({ error: 'Job not found' }, { status: 404 });
-                }
-                
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
                 const job = jobs[0];
-                
-                if (job.status === 'done') {
+                if (job.status === 'done' || job.status === 'error') {
                     return Response.json({ job, message: 'Job already completed' });
                 }
 
-                if (JOB_LOCKS.has(job_id)) {
-                    return Response.json({ job, message: 'Already processing in this instance' });
+                await base44.entities.Job.update(job_id, { status: 'running' });
+
+                const connections = await base44.entities.APIConnection.filter({ id: job.connection_id });
+                if (!connections.length) {
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found' });
+                    return Response.json({ error: 'Connection not found' }, { status: 404 });
+                }
+                const conn = connections[0];
+                const apiKey = await decryptString(conn.api_key_encrypted);
+                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
+
+                const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
+                const specText = specVersions[0]?.spec_text || '';
+
+                const economyCodes = await base44.entities.EconomyCode.list();
+                const economyMap = {};
+                economyCodes.forEach((ec) => { economyMap[ec.economy.toLowerCase().trim()] = ec.economy_code; });
+
+                const allRows = await base44.entities.JobRow.filter({ job_id });
+                const pendingRows = allRows
+                    .filter((r) => r.status === 'pending')
+                    .sort((a, b) => a.row_index - b.row_index)
+                    .slice(0, BATCH_SIZE);
+
+                if (!pendingRows.length) {
+                    await base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows });
+                    return Response.json({ job: { ...job, status: 'done' }, message: 'All rows processed' });
                 }
 
-                const lockToken = await acquireLock(base44, job_id);
-                if (!lockToken) {
-                    return Response.json({ job, message: 'Already processing (locked by another instance)' });
-                }
+                let processedCount = 0;
 
-                JOB_LOCKS.add(job_id);
-                try {
-                    await runProcessingLoop(base44, job_id, lockToken);
-                } finally {
-                    await releaseLock(base44, job_id);
-                    JOB_LOCKS.delete(job_id);
-                }
+                for (const row of pendingRows) {
+                    try {
+                        await base44.entities.JobRow.update(row.id, { status: 'processing' });
+                        const input = row.input_data;
+                        const economyCode = economyMap[input.Economy?.toLowerCase()?.trim()] || '';
 
-                const updatedJobs = await base44.entities.Job.filter({ id: job_id });
-                return Response.json({ job: updatedJobs[0] });
-            }
+                        const query1 = `${input.Legal_basis || input['Legal basis']} ${input.Economy} official text`;
+                        const query2 = `${input.Legal_basis || input['Legal basis']} ${input.Economy} legislation database`;
+                        const query3 = `${input.Topic} ${input.Economy} legal instrument ${input.Question}`;
 
-            case 'rerun': {
-                const { job_id, use_latest_spec } = params;
-                if (!job_id) return Response.json({ error: 'job_id required' }, { status: 400 });
+                        const systemPrompt = `You are a legal metadata extraction assistant. Follow the specification below EXACTLY. Always respond with valid JSON only — no markdown, no explanation.\n\n${specText}`;
 
-                const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (jobs.length === 0) {
-                    return Response.json({ error: 'Job not found' }, { status: 404 });
-                }
-                const oldJob = jobs[0];
+                        const userPrompt = `Extract metadata for this row:
+- Owner: ${input.Owner}
+- Economy: ${input.Economy}
+- Economy_Code: ${economyCode}
+- Legal basis: ${input.Legal_basis || input['Legal basis']}
+- Question: ${input.Question}
+- Topic: ${input.Topic}
 
-                // Determine spec version
-                let specVersionId = oldJob.spec_version_id;
-                if (use_latest_spec) {
-                    const specs = await base44.entities.Spec.filter({ is_active: true });
-                    if (specs.length > 0) {
-                        const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
-                        versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
-                        if (versions.length > 0) {
-                            specVersionId = versions[0].id;
+Search queries to use:
+1. ${query1}
+2. ${query2}
+3. ${query3}
+
+Return a JSON object with exactly this structure:
+{
+  "output": {
+    "Owner": "${input.Owner}",
+    "Economy": "${input.Economy}",
+    "Economy_Code": "${economyCode}",
+    "Legal_basis": "${input.Legal_basis || input['Legal basis']}",
+    "Question": "${input.Question}",
+    "Topic": "${input.Topic}",
+    "Instrument_Title": "extracted title",
+    "Instrument_URL": "source URL",
+    "Instrument_Date": "YYYY-MM-DD",
+    "Instrument_Type": "type",
+    "Extraction_Status": "success|partial|failed",
+    "Confidence_Score": 0.0,
+    "Processing_Notes": ""
+  },
+  "evidence": {
+    "Row_Index": ${row.row_index},
+    "Query_1": "${query1}",
+    "Query_2": "${query2}",
+    "Query_3": "${query3}",
+    "URLs_Considered": "",
+    "Selected_Source_URLs": "",
+    "Tier": "",
+    "Raw_Evidence": "",
+    "Extraction_Logic": "",
+    "Flags": ""
+  }
+}`;
+
+                        const { url, init } = buildLLMRequest(
+                            providerType, job.model_id, systemPrompt, userPrompt,
+                            job.web_search_choice, conn.base_url, apiKey
+                        );
+
+                        const response = await fetchWithRetry(url, init);
+                        const data = await response.json();
+                        const content = extractTextContent(providerType, data);
+                        let parsed = extractJSON(content);
+
+                        if (!parsed) {
+                            parsed = {
+                                output: {
+                                    Owner: input.Owner, Economy: input.Economy, Economy_Code: economyCode,
+                                    Legal_basis: input.Legal_basis || input['Legal basis'],
+                                    Question: input.Question, Topic: input.Topic,
+                                    Extraction_Status: 'failed', Confidence_Score: 0,
+                                    Processing_Notes: 'Failed to parse LLM response',
+                                },
+                                evidence: {
+                                    Row_Index: row.row_index,
+                                    Query_1: query1, Query_2: query2, Query_3: query3,
+                                    Raw_Evidence: content.slice(0, 2000), Flags: 'PARSE_ERROR',
+                                },
+                            };
                         }
+
+                        if (parsed.output) parsed.output.Economy_Code = economyCode;
+                        if (!economyCode && parsed.evidence) {
+                            parsed.evidence.Flags = [parsed.evidence.Flags, 'NO_ECONOMY_CODE'].filter(Boolean).join(', ');
+                        }
+
+                        await base44.entities.JobRow.update(row.id, {
+                            status: 'done',
+                            output_json: parsed.output || {},
+                            evidence_json: parsed.evidence || {},
+                        });
+                        processedCount++;
+
+                    } catch (error) {
+                        await base44.entities.JobRow.update(row.id, {
+                            status: 'error',
+                            error_message: error.message?.slice(0, 500),
+                        });
                     }
                 }
 
-                // Get old job rows for input data
-                const oldRows = await base44.entities.JobRow.filter({ job_id });
-                oldRows.sort((a, b) => a.row_index - b.row_index);
+                const updatedRows = await base44.entities.JobRow.filter({ job_id });
+                const doneCount  = updatedRows.filter((r) => r.status === 'done').length;
+                const errCount   = updatedRows.filter((r) => r.status === 'error').length;
+                const pendingLeft = updatedRows.filter((r) => r.status === 'pending').length;
+                const newStatus  = pendingLeft === 0 ? 'done' : 'running';
 
-                // Get connection/model display names
-                const connections = await base44.entities.APIConnection.filter({ id: oldJob.connection_id });
-                const models = await base44.entities.ModelCatalog.filter({ connection_id: oldJob.connection_id, model_id: oldJob.model_id });
-
-                const newJob = await base44.entities.Job.create({
-                    connection_id: oldJob.connection_id,
-                    model_id: oldJob.model_id,
-                    web_search_choice: oldJob.web_search_choice || 'none',
-                    spec_version_id: specVersionId,
-                    status: 'queued',
-                    input_file_url: oldJob.input_file_url,
-                    input_file_name: oldJob.input_file_name,
-                    total_rows: oldRows.length,
-                    processed_rows: 0,
-                    progress_json: { current_batch: 0, last_row_index: 0 },
-                    connection_name: connections[0]?.name || oldJob.connection_name || 'Unknown',
-                    model_name: models[0]?.display_name || oldJob.model_name || oldJob.model_id,
-                    processing_lock_token: '',
-                    processing_lock_expires_at: ''
+                await base44.entities.Job.update(job_id, {
+                    processed_rows: doneCount + errCount,
+                    status: newStatus,
+                    progress_json: {
+                        current_batch: (job.progress_json?.current_batch || 0) + 1,
+                        last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
+                    },
                 });
 
-                for (const oldRow of oldRows) {
-                    await base44.entities.JobRow.create({
-                        job_id: newJob.id,
-                        row_index: oldRow.row_index,
-                        input_data: oldRow.input_data,
-                        status: 'pending',
-                        retry_count: 0
-                    });
-                }
-
-                // Auto-start
-                if (!JOB_LOCKS.has(newJob.id)) {
-                    JOB_LOCKS.add(newJob.id);
-                    const lockToken = await acquireLock(base44, newJob.id);
-                    if (lockToken) {
-                        try {
-                            await runProcessingLoop(base44, newJob.id, lockToken);
-                        } finally {
-                            await releaseLock(base44, newJob.id);
-                            JOB_LOCKS.delete(newJob.id);
-                        }
-                    } else {
-                        JOB_LOCKS.delete(newJob.id);
-                    }
-                }
-
-                const updatedJobs = await base44.entities.Job.filter({ id: newJob.id });
-                return Response.json({ job: updatedJobs[0] || newJob });
+                const updatedJobs = await base44.entities.Job.filter({ id: job_id });
+                return Response.json({
+                    job: updatedJobs[0],
+                    processed_this_batch: processedCount,
+                    remaining: pendingLeft,
+                });
             }
 
             case 'getStatus': {
                 const { job_id } = params;
-                if (!job_id) return Response.json({ error: 'job_id required' }, { status: 400 });
-                
                 const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (jobs.length === 0) {
-                    return Response.json({ error: 'Job not found' }, { status: 404 });
-                }
-                
-                const job = jobs[0];
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
                 const rows = await base44.entities.JobRow.filter({ job_id });
-                
                 const statusCounts = {
-                    pending: rows.filter(r => r.status === 'pending').length,
-                    processing: rows.filter(r => r.status === 'processing').length,
-                    done: rows.filter(r => r.status === 'done').length,
-                    error: rows.filter(r => r.status === 'error').length
+                    pending:    rows.filter((r) => r.status === 'pending').length,
+                    processing: rows.filter((r) => r.status === 'processing').length,
+                    done:       rows.filter((r) => r.status === 'done').length,
+                    error:      rows.filter((r) => r.status === 'error').length,
                 };
-                
-                return Response.json({ job, statusCounts });
+
+                return Response.json({ job: jobs[0], statusCounts });
             }
-            
+
             case 'list': {
                 const jobs = await base44.entities.Job.filter({ created_by: user.email });
-                jobs.sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
+                jobs.sort((a, b) => new Date(b.created_date).getTime() - new Date(a.created_date).getTime());
                 return Response.json({ jobs });
             }
-            
+
             case 'getRows': {
                 const { job_id } = params;
-                if (!job_id) return Response.json({ error: 'job_id required' }, { status: 400 });
                 const rows = await base44.entities.JobRow.filter({ job_id });
                 rows.sort((a, b) => a.row_index - b.row_index);
                 return Response.json({ rows });
             }
-            
+
             default:
-                return Response.json({ error: 'Unknown action' }, { status: 400 });
+                return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
         }
     } catch (error) {
         return Response.json({ error: error.message }, { status: 500 });
