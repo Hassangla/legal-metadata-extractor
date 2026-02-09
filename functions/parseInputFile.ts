@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
             return Response.json({ error: 'file_url is required but was empty or missing.' }, { status: 400 });
         }
 
-        // ── Step 1: Download the uploaded file ──────────────────
+        // ── Step 1: Download ────────────────────────────────────
         let response;
         try {
             response = await fetch(file_url);
@@ -59,26 +59,136 @@ Deno.serve(async (req) => {
             return Response.json({ error: 'Excel file contains no sheets.' }, { status: 400 });
         }
 
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
+        // ── Step 3: Read active spec to find expected columns ───
+        // The spec defines what columns the input should have.
+        // We use this to auto-detect which sheet contains the real data.
+        let expectedColumns = [];
+        try {
+            const specs = await base44.entities.Spec.filter({ is_active: true });
+            if (specs.length > 0) {
+                const specText = specs[0].current_text || '';
 
-        if (!worksheet) {
-            return Response.json({ error: `Sheet "${sheetName}" is empty or unreadable.` }, { status: 400 });
+                // Pattern 1: pipe-separated "columns: Owner | Economy | Legal basis"
+                const pipeMatch = specText.match(/columns?\s*[:]\s*([^\n]*\|[^\n]*)/i);
+                if (pipeMatch) {
+                    expectedColumns = pipeMatch[1]
+                        .split('|')
+                        .map(c => c.trim().toLowerCase())
+                        .filter(c => c.length > 0 && c.length < 50);
+                }
+
+                // Pattern 2: bullet list under "Input" heading
+                // - Owner
+                // - Economy
+                // - Legal basis
+                if (expectedColumns.length === 0) {
+                    const inputSection = specText.match(/input[^\n]*\n((?:\s*[-*]\s+[^\n]+\n?)+)/i);
+                    if (inputSection) {
+                        expectedColumns = inputSection[1]
+                            .split('\n')
+                            .map(line => line.replace(/^\s*[-*]\s+/, '').trim().toLowerCase())
+                            .filter(c => c.length > 0 && c.length < 50);
+                    }
+                }
+            }
+        } catch (_) {
+            // Spec not available — will fall back to heuristics
         }
 
-        // ── Step 3: Convert to row objects ──────────────────────
+        // ── Step 4: Score each sheet → pick best match ──────────
+        function normalizeHeader(h) {
+            return (h || '').toLowerCase().trim().replace(/[_\s]+/g, ' ');
+        }
+
+        function scoreSheet(headers) {
+            if (expectedColumns.length === 0) return 0;
+            const normalized = headers.map(normalizeHeader);
+            return expectedColumns.filter(ec =>
+                normalized.some(h => h === ec || h === ec.replace(/\s+/g, '_'))
+            ).length;
+        }
+
+        let bestSheetName = workbook.SheetNames[0];
+        let bestScore = 0;
+        const sheetSummaries = [];
+
+        for (const name of workbook.SheetNames) {
+            const ws = workbook.Sheets[name];
+            if (!ws) {
+                sheetSummaries.push({ name, rows: 0, columns: [], score: 0 });
+                continue;
+            }
+
+            let sheetData;
+            try {
+                sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            } catch (_) {
+                sheetSummaries.push({ name, rows: 0, columns: [], score: 0 });
+                continue;
+            }
+
+            const headers = sheetData.length > 0 ? Object.keys(sheetData[0]) : [];
+            const nonEmpty = sheetData.filter(row =>
+                Object.values(row).some(v => v !== '' && v !== null && v !== undefined)
+            );
+
+            const score = scoreSheet(headers);
+            sheetSummaries.push({
+                name,
+                rows: nonEmpty.length,
+                columns: headers.map(h => h.trim()).filter(Boolean),
+                score,
+            });
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestSheetName = name;
+            }
+        }
+
+        // If no sheet matched spec columns (score=0) and there are multiple sheets,
+        // use density heuristic: pick the sheet with the highest data-fill ratio.
+        if (bestScore === 0 && workbook.SheetNames.length > 1) {
+            let bestDensity = -1;
+            for (const summary of sheetSummaries) {
+                if (summary.rows === 0 || summary.columns.length === 0) continue;
+                const ws = workbook.Sheets[summary.name];
+                const sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                let filled = 0;
+                let total = 0;
+                for (const row of sheetData) {
+                    for (const v of Object.values(row)) {
+                        total++;
+                        if (v !== '' && v !== null && v !== undefined) filled++;
+                    }
+                }
+                const density = total > 0 ? filled / total : 0;
+                if (density > bestDensity) {
+                    bestDensity = density;
+                    bestSheetName = summary.name;
+                }
+            }
+        }
+
+        // ── Step 5: Read the selected sheet ─────────────────────
+        const worksheet = workbook.Sheets[bestSheetName];
+
+        if (!worksheet) {
+            return Response.json({ error: `Sheet "${bestSheetName}" is empty or unreadable.` }, { status: 400 });
+        }
+
         let data;
         try {
             data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
         } catch (e) {
             return Response.json({
-                error: `Failed to convert sheet to rows: ${e.message}`
+                error: `Failed to convert sheet "${bestSheetName}" to rows: ${e.message}`
             }, { status: 400 });
         }
 
         if (!data || data.length === 0) {
             return Response.json({
-                error: 'The first sheet has no data rows. Row 1 should have headers, row 2+ should have data.'
+                error: `Sheet "${bestSheetName}" has no data rows. Row 1 should have headers, row 2+ should have data.`
             }, { status: 400 });
         }
 
@@ -90,10 +200,7 @@ Deno.serve(async (req) => {
             }, { status: 400 });
         }
 
-        // ── Step 4: Pass through ALL columns as-is ──────────────
-        // No hardcoded column validation. No renaming. No dropping.
-        // The Specification (system prompt) defines what columns mean.
-        // The LLM interprets them at runtime.
+        // ── Step 6: Pass through ALL columns as-is ──────────────
         const rows = data.map(row => {
             const cleaned = {};
             for (const [key, value] of Object.entries(row)) {
@@ -105,14 +212,13 @@ Deno.serve(async (req) => {
             return cleaned;
         });
 
-        // Filter out completely empty rows (all values blank)
         const nonEmptyRows = rows.filter(row =>
             Object.values(row).some(v => v !== '' && v !== null && v !== undefined)
         );
 
         if (nonEmptyRows.length === 0) {
             return Response.json({
-                error: 'All data rows are empty. Make sure your data starts in row 2.'
+                error: `Sheet "${bestSheetName}" has no non-empty data rows.`
             }, { status: 400 });
         }
 
@@ -120,7 +226,10 @@ Deno.serve(async (req) => {
             success: true,
             rows: nonEmptyRows,
             total_rows: nonEmptyRows.length,
-            columns: headers.map(h => h.trim()).filter(Boolean)
+            columns: headers.map(h => h.trim()).filter(Boolean),
+            selected_sheet: bestSheetName,
+            all_sheets: sheetSummaries,
+            matched_by: bestScore > 0 ? 'spec_columns' : (workbook.SheetNames.length > 1 ? 'density_heuristic' : 'only_sheet'),
         });
 
     } catch (error) {

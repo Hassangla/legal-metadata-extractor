@@ -238,18 +238,19 @@ function googleFetchUrl(base, path, apiKey) {
 }
 
 // ── WEB SEARCH AUTO-DETECTION ───────────────────────────────
-// Tags models with web search support based on provider + model name.
-// This avoids expensive per-model probe API calls.
+// Tags models with web search support based on provider + model name + base URL.
+// The third parameter baseUrl lets us identify openai_compatible providers.
 
-function detectWebSearch(providerKey, modelId) {
+function detectWebSearch(providerKey, modelId, baseUrl) {
     const id = (modelId || '').toLowerCase();
+    const url = (baseUrl || '').toLowerCase();
 
     // Perplexity: all models have built-in web search
     if (providerKey === 'perplexity') {
         return { supports: true, options: ['builtin'] };
     }
 
-    // Anthropic: Claude 3+ and Claude 4 models support web_search tool
+    // Anthropic: Claude models support web_search tool
     if (providerKey === 'anthropic') {
         if (id.includes('claude')) {
             return { supports: true, options: ['web_search'] };
@@ -290,11 +291,46 @@ function detectWebSearch(providerKey, modelId) {
         if (id.includes('perplexity/')) {
             return { supports: true, options: ['builtin'] };
         }
-        return { supports: null, options: [] }; // unknown for other OpenRouter models
+        return { supports: null, options: [] };
     }
 
-    // All other providers (groq, together, mistral, azure, openai_compatible)
-    // Cannot reliably determine — leave as null (shows "Unknown" in UI)
+    // ── OpenAI-Compatible: identify known providers by base URL ──
+    if (providerKey === 'openai_compatible') {
+
+        // Moonshot / Kimi — supports function calling with web search
+        if (url.includes('moonshot') || url.includes('kimi')) {
+            return { supports: true, options: ['web_search'] };
+        }
+
+        // DeepSeek — deepseek-chat and deepseek-v* support tool use
+        if (url.includes('deepseek')) {
+            if (id.includes('deepseek-chat') || id.includes('deepseek-v') || id.includes('deepseek-r')) {
+                return { supports: true, options: ['web_search'] };
+            }
+            return { supports: null, options: [] };
+        }
+
+        // xAI / Grok — grok models support function calling
+        if (url.includes('x.ai') || url.includes('xai.')) {
+            if (id.includes('grok')) {
+                return { supports: true, options: ['web_search'] };
+            }
+            return { supports: null, options: [] };
+        }
+
+        // Cohere — command models support web connectors
+        if (url.includes('cohere')) {
+            if (id.includes('command')) {
+                return { supports: true, options: ['web_search'] };
+            }
+            return { supports: false, options: [] };
+        }
+
+        // Generic openai_compatible — cannot determine
+        return { supports: null, options: [] };
+    }
+
+    // Groq, Together, Mistral, Azure — cannot reliably auto-detect
     return { supports: null, options: [] };
 }
 
@@ -570,6 +606,28 @@ Deno.serve(async (req) => {
                     }
                 }
 
+                // Re-apply web search detection on cached models that still have null.
+                // This patches models cached before detectWebSearch was expanded.
+                if (conn && models.length > 0) {
+                    const pk = conn.provider_type || 'openai_compatible';
+                    for (const m of models) {
+                        if (m.supports_web_search === null || m.supports_web_search === undefined) {
+                            const ws = detectWebSearch(pk, m.model_id, conn.base_url);
+                            if (ws.supports !== null) {
+                                try {
+                                    await base44.entities.ModelCatalog.update(m.id, {
+                                        supports_web_search: ws.supports,
+                                        web_search_options: ws.options,
+                                        last_checked_at: new Date().toISOString(),
+                                    });
+                                    m.supports_web_search = ws.supports;
+                                    m.web_search_options = ws.options;
+                                } catch (_) {}
+                            }
+                        }
+                    }
+                }
+
                 return Response.json({
                     models,
                     provider_type: conn?.provider_type || null,
@@ -634,7 +692,7 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
 
     for (const m of models) {
         // Auto-detect web search support from provider + model name
-        const ws = detectWebSearch(providerKey, m.id);
+        const ws = detectWebSearch(providerKey, m.id, baseUrl);
 
         const existing = await base44.entities.ModelCatalog.filter({
             connection_id: connectionId,
