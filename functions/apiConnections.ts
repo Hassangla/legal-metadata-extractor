@@ -362,6 +362,9 @@ Deno.serve(async (req) => {
             }
 
             case 'testNew': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required to manage API connections' }, { status: 403 });
+                }
                 const { base_url, api_key } = params;
                 if (!base_url || !api_key) {
                     return Response.json({ error: 'base_url and api_key are required' }, { status: 400 });
@@ -425,6 +428,9 @@ Deno.serve(async (req) => {
             }
 
             case 'create': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required to manage API connections' }, { status: 403 });
+                }
                 const { name, base_url, api_key } = params;
                 if (!name || !base_url || !api_key) {
                     return Response.json({ error: 'name, base_url, and api_key are required' }, { status: 400 });
@@ -453,6 +459,9 @@ Deno.serve(async (req) => {
             }
 
             case 'testExisting': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required to manage API connections' }, { status: 403 });
+                }
                 const { connection_id } = params;
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 if (!connections.length) return Response.json({ error: 'Not found' }, { status: 404 });
@@ -504,6 +513,9 @@ Deno.serve(async (req) => {
             }
 
             case 'delete': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required to manage API connections' }, { status: 403 });
+                }
                 const { connection_id } = params;
                 const models = await base44.entities.ModelCatalog.filter({ connection_id });
                 for (const m of models) await base44.entities.ModelCatalog.delete(m.id);

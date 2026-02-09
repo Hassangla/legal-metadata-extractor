@@ -148,6 +148,56 @@ function extractJSON(content) {
     return null;
 }
 
+// ── MODEL PRICING (per million tokens) ──────────────────────
+const MODEL_PRICING = {
+    'gpt-4o':           { input: 2.50, output: 10.00 },
+    'gpt-4o-mini':      { input: 0.15, output: 0.60 },
+    'gpt-4-turbo':      { input: 10.00, output: 30.00 },
+    'gpt-4.1':          { input: 2.00, output: 8.00 },
+    'gpt-4.1-mini':     { input: 0.40, output: 1.60 },
+    'gpt-4.1-nano':     { input: 0.10, output: 0.40 },
+    'o1':               { input: 15.00, output: 60.00 },
+    'o1-mini':          { input: 1.10, output: 4.40 },
+    'o3':               { input: 2.00, output: 8.00 },
+    'o3-mini':          { input: 1.10, output: 4.40 },
+    'o4-mini':          { input: 1.10, output: 4.40 },
+    'claude-sonnet-4':  { input: 3.00, output: 15.00 },
+    'claude-opus-4':    { input: 15.00, output: 75.00 },
+    'claude-haiku-3.5': { input: 0.80, output: 4.00 },
+    'claude-3-5-sonnet':{ input: 3.00, output: 15.00 },
+    'gemini-2.5-pro':   { input: 1.25, output: 10.00 },
+    'gemini-2.5-flash': { input: 0.15, output: 0.60 },
+    'gemini-2.0-flash': { input: 0.10, output: 0.40 },
+    'moonshot-v1-auto':  { input: 0.55, output: 0.55 },
+    'moonshot-v1-8k':    { input: 0.17, output: 0.17 },
+    'moonshot-v1-32k':   { input: 0.33, output: 0.33 },
+    'moonshot-v1-128k':  { input: 0.83, output: 0.83 },
+    'kimi-latest':       { input: 0.55, output: 0.55 },
+    'deepseek-chat':     { input: 0.14, output: 0.28 },
+    'deepseek-reasoner': { input: 0.55, output: 2.19 },
+    'sonar':             { input: 1.00, output: 1.00 },
+    'sonar-pro':         { input: 3.00, output: 15.00 },
+    'grok-3':            { input: 3.00, output: 15.00 },
+    'grok-3-mini':       { input: 0.30, output: 0.50 },
+};
+
+function estimateCost(modelId, providerType, inputTokens, outputTokens) {
+    const id = (modelId || '').toLowerCase();
+
+    if (MODEL_PRICING[id]) {
+        const p = MODEL_PRICING[id];
+        return ((inputTokens * p.input) + (outputTokens * p.output)) / 1_000_000;
+    }
+
+    for (const [key, p] of Object.entries(MODEL_PRICING)) {
+        if (id.startsWith(key) || id.includes(key)) {
+            return ((inputTokens * p.input) + (outputTokens * p.output)) / 1_000_000;
+        }
+    }
+
+    return ((inputTokens * 2) + (outputTokens * 8)) / 1_000_000;
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -161,7 +211,7 @@ Deno.serve(async (req) => {
         switch (action) {
 
             case 'create': {
-                const { connection_id, model_id, web_search_choice, input_file_url, input_file_name, total_rows, input_rows } = params;
+                const { connection_id, model_id, web_search_choice, input_file_url, input_file_name, total_rows, input_rows, task_name } = params;
 
                 const specs = await base44.entities.Spec.filter({ is_active: true });
                 if (!specs.length) return Response.json({ error: 'No active spec. Configure the spec first.' }, { status: 400 });
@@ -190,6 +240,10 @@ Deno.serve(async (req) => {
                     connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
                     provider_type: conn?.provider_type || 'openai_compatible',
+                    task_name: task_name || '',
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    estimated_cost_usd: 0,
                 });
 
                 if (input_rows?.length) {
@@ -313,6 +367,18 @@ Return a JSON object with exactly this structure:
                         const content = extractTextContent(providerType, data);
                         let parsed = extractJSON(content);
 
+                        // Track token usage from API response
+                        let inputTokens = 0;
+                        let outputTokens = 0;
+                        if (data.usage) {
+                            inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                            outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
+                        } else if (data.usageMetadata) {
+                            // Google format
+                            inputTokens = data.usageMetadata.promptTokenCount || 0;
+                            outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+                        }
+
                         if (!parsed) {
                             parsed = {
                                 output: {
@@ -339,6 +405,8 @@ Return a JSON object with exactly this structure:
                             status: 'done',
                             output_json: parsed.output || {},
                             evidence_json: parsed.evidence || {},
+                            input_tokens: inputTokens,
+                            output_tokens: outputTokens,
                         });
                         processedCount++;
 
@@ -356,14 +424,29 @@ Return a JSON object with exactly this structure:
                 const pendingLeft = updatedRows.filter((r) => r.status === 'pending').length;
                 const newStatus  = pendingLeft === 0 ? 'done' : 'running';
 
-                await base44.entities.Job.update(job_id, {
+                // Aggregate token usage across all done rows
+                const doneRows = updatedRows.filter(r => r.status === 'done');
+                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
+                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+
+                const updatePayload = {
                     processed_rows: doneCount + errCount,
                     status: newStatus,
                     progress_json: {
                         current_batch: (job.progress_json?.current_batch || 0) + 1,
                         last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
                     },
-                });
+                    total_input_tokens: totalInputTokens,
+                    total_output_tokens: totalOutputTokens,
+                };
+
+                // Calculate estimated cost if job is done
+                if (newStatus === 'done') {
+                    const cost = estimateCost(job.model_id, job.provider_type, totalInputTokens, totalOutputTokens);
+                    updatePayload.estimated_cost_usd = cost;
+                }
+
+                await base44.entities.Job.update(job_id, updatePayload);
 
                 const updatedJobs = await base44.entities.Job.filter({ id: job_id });
                 return Response.json({
@@ -453,6 +536,53 @@ Return a JSON object with exactly this structure:
                 const rows = await base44.entities.JobRow.filter({ job_id });
                 rows.sort((a, b) => a.row_index - b.row_index);
                 return Response.json({ rows });
+            }
+
+            case 'stop': {
+                const { job_id } = params;
+                const jobs = await base44.entities.Job.filter({ id: job_id });
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
+                const job = jobs[0];
+                if (job.status !== 'running' && job.status !== 'queued') {
+                    return Response.json({ error: 'Job is not running' }, { status: 400 });
+                }
+
+                const allRows = await base44.entities.JobRow.filter({ job_id });
+                let stopped = 0;
+                for (const row of allRows) {
+                    if (row.status === 'pending' || row.status === 'processing') {
+                        await base44.entities.JobRow.update(row.id, {
+                            status: 'error',
+                            error_message: 'Stopped by user'
+                        });
+                        stopped++;
+                    }
+                }
+
+                const doneRows = allRows.filter(r => r.status === 'done');
+                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
+                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+                const cost = estimateCost(job.model_id, job.provider_type, totalInputTokens, totalOutputTokens);
+
+                await base44.entities.Job.update(job_id, {
+                    status: 'done',
+                    error_message: `Stopped by user. ${stopped} rows skipped.`,
+                    total_input_tokens: totalInputTokens,
+                    total_output_tokens: totalOutputTokens,
+                    estimated_cost_usd: cost,
+                });
+
+                return Response.json({ success: true, stopped });
+            }
+
+            case 'rename': {
+                const { job_id, task_name } = params;
+                const jobs = await base44.entities.Job.filter({ id: job_id });
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
+                await base44.entities.Job.update(job_id, { task_name: task_name || '' });
+                return Response.json({ success: true });
             }
 
             default:
