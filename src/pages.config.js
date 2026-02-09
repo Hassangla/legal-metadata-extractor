@@ -48,19 +48,19 @@
  * The mainPage value must match a key in the PAGES object exactly.
  */
 import Dashboard from './pages/Dashboard';
-import NewRun from './pages/NewRun';
-import SpecEditor from './pages/SpecEditor';
-import Settings from './pages/Settings';
 import History from './pages/History';
+import NewRun from './pages/NewRun';
+import Settings from './pages/Settings';
+import SpecEditor from './pages/SpecEditor';
 import __Layout from './Layout.jsx';
 
 
 export const PAGES = {
     "Dashboard": Dashboard,
-    "NewRun": NewRun,
-    "SpecEditor": SpecEditor,
-    "Settings": Settings,
     "History": History,
+    "NewRun": NewRun,
+    "Settings": Settings,
+    "SpecEditor": SpecEditor,
 }
 
 export const pagesConfig = {
