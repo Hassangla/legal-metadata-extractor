@@ -58,7 +58,9 @@ export default function FileUploader({ onFileProcessed, parsedData }) {
             });
 
         } catch (error) {
-            toast.error('Failed to process file');
+            const msg = error?.response?.data?.error || error?.message || 'Failed to process file';
+            toast.error(msg);
+            console.error('File processing error:', error);
             onFileProcessed(null);
         } finally {
             setUploading(false);

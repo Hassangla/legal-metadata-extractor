@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,97 +17,120 @@ export default function JobProgress({ jobId, onComplete }) {
     const [resuming, setResuming] = useState(false);
     const [generating, setGenerating] = useState(false);
     const pollRef = useRef(null);
-    const kickedRef = useRef(false);
+    const processingRef = useRef(false);  // FIX: guard against overlapping process calls
+    const jobIdRef = useRef(jobId);       // FIX: track current jobId to avoid stale closures
+
+    // FIX: Keep ref in sync
+    useEffect(() => {
+        jobIdRef.current = jobId;
+    }, [jobId]);
 
     useEffect(() => {
         if (jobId) {
-            kickedRef.current = false;
+            processingRef.current = false;
             loadJobStatus();
         }
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
+            processingRef.current = false;
         };
     }, [jobId]);
 
-    // Auto-kick processing once if job is queued/running with pending rows
-    useEffect(() => {
-        if (!job || kickedRef.current) return;
+    const loadJobStatus = useCallback(async () => {
+        try {
+            const response = await base44.functions.invoke('jobProcessor', {
+                action: 'getStatus',
+                job_id: jobIdRef.current
+            });
+            const jobData = response.data.job;
+            const counts = response.data.statusCounts;
+            setJob(jobData);
+            setStatusCounts(counts);
+            
+            if (jobData.status === 'done') {
+                onComplete?.(jobData);
+            }
 
-        const needsKick = (job.status === 'queued' || job.status === 'running') &&
-                          statusCounts && statusCounts.pending > 0;
-
-        if (needsKick) {
-            kickedRef.current = true;
-            kickProcessing();
+            return { jobData, counts };
+        } catch (error) {
+            console.error('Failed to load job status:', error);
+            return null;
+        } finally {
+            setLoading(false);
         }
-    }, [job?.status, statusCounts]);
+    }, [onComplete]);
 
-    // Poll while job is active
+    // FIX: Auto-kick processing with sequential batch continuation
+    useEffect(() => {
+        if (!job) return;
+
+        const isActive = job.status === 'queued' || job.status === 'running';
+        const hasPending = statusCounts && statusCounts.pending > 0;
+
+        if (isActive && hasPending && !processingRef.current) {
+            processingRef.current = true;
+            processNextBatch();
+        }
+    }, [job?.status, statusCounts?.pending]);
+
+    // FIX: Sequential batch processor — processes one batch, refreshes, then continues
+    const processNextBatch = async () => {
+        try {
+            // FIX: action is 'process', NOT 'start' (backend only has 'process')
+            const response = await base44.functions.invoke('jobProcessor', {
+                action: 'process',
+                job_id: jobIdRef.current
+            });
+
+            // Refresh status after batch completes
+            const result = await loadJobStatus();
+
+            // If still has pending rows and job is running, process next batch
+            if (result && 
+                result.counts.pending > 0 && 
+                (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
+                // Small delay to avoid hammering the server
+                await new Promise(r => setTimeout(r, 500));
+                // Continue processing if this is still the same job
+                if (processingRef.current) {
+                    processNextBatch();
+                }
+            } else {
+                processingRef.current = false;
+            }
+        } catch (error) {
+            console.error('Batch processing error:', error);
+            processingRef.current = false;
+            // Refresh status to show current state
+            await loadJobStatus();
+        }
+    };
+
+    // FIX: Poll for status updates while processing (read-only check, no processing)
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
 
         const isActive = job?.status === 'queued' || job?.status === 'running';
         if (isActive) {
-            pollRef.current = setInterval(loadJobStatus, 3000);
+            pollRef.current = setInterval(loadJobStatus, 5000);
         }
 
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
         };
-    }, [job?.status]);
+    }, [job?.status, loadJobStatus]);
 
-    const loadJobStatus = async () => {
-        try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'getStatus',
-                job_id: jobId
-            });
-            setJob(response.data.job);
-            setStatusCounts(response.data.statusCounts);
-            
-            if (response.data.job.status === 'done') {
-                onComplete?.(response.data.job);
-            }
-        } catch (error) {
-            console.error('Failed to load job status:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const kickProcessing = async () => {
-        // Fire-and-forget: call 'start' once. Server handles the loop.
-        // We don't await because the call may take up to 25s processing rows.
-        base44.functions.invoke('jobProcessor', {
-            action: 'start',
-            job_id: jobId
-        }).then((response) => {
-            // After server returns (time budget exhausted or done), refresh status
-            loadJobStatus();
-            // If there are still pending rows and job is running, kick again
-            if (response.data?.job?.status === 'running') {
-                const rows = statusCounts;
-                // Re-kick if needed (server finished its time budget)
-                setTimeout(() => {
-                    base44.functions.invoke('jobProcessor', {
-                        action: 'start',
-                        job_id: jobId
-                    }).then(() => loadJobStatus());
-                }, 1000);
-            }
-        }).catch(() => {
-            // Silently handle — poll will pick up status
-        });
-    };
-
+    // FIX: Resume uses 'process' action (not 'start')
     const handleResume = async () => {
         setResuming(true);
         try {
             await base44.functions.invoke('jobProcessor', {
-                action: 'start',
+                action: 'process',
                 job_id: jobId
             });
             await loadJobStatus();
+            // Re-trigger the auto-kick loop
+            processingRef.current = false;
         } catch (error) {
             toast.error('Failed to resume');
         } finally {
