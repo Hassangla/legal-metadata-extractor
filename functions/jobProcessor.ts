@@ -161,7 +161,7 @@ Deno.serve(async (req) => {
                 }
                 
                 const conn = connections[0];
-                const apiKey = atob(conn.api_key_encrypted);
+                const apiKey = await decryptAndMigrate(conn, base44);
                 
                 // Get spec version
                 const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
