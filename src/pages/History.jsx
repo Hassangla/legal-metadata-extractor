@@ -102,6 +102,7 @@ export default function History() {
     };
 
     const filteredJobs = jobs.filter(job =>
+        job.task_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         job.input_file_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         job.model_id?.toLowerCase().includes(searchTerm.toLowerCase())
     );
@@ -181,8 +182,11 @@ export default function History() {
                                                         </div>
                                                         <div>
                                                             <p className="font-medium text-slate-900">
-                                                                {job.input_file_name || 'Untitled'}
+                                                                {job.task_name || job.input_file_name || 'Untitled'}
                                                             </p>
+                                                            {job.task_name && (
+                                                                <p className="text-xs text-slate-400">{job.input_file_name}</p>
+                                                            )}
                                                             <p className="text-sm text-slate-500">
                                                                 {format(new Date(job.created_date), 'MMM d, yyyy HH:mm')}
                                                             </p>
@@ -196,6 +200,11 @@ export default function History() {
                                                             <Badge className={`${status.bg} ${status.color}`}>
                                                                 {status.label}
                                                             </Badge>
+                                                            {job.status === 'done' && job.estimated_cost_usd > 0 && (
+                                                                <p className="text-xs text-green-600 mt-1">
+                                                                    ${job.estimated_cost_usd < 0.01 ? '<0.01' : job.estimated_cost_usd.toFixed(4)}
+                                                                </p>
+                                                            )}
                                                         </div>
                                                         {(job.status === 'done' || job.processed_rows > 0) && (
                                                             <Button

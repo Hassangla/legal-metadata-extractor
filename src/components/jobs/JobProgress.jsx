@@ -16,6 +16,7 @@ export default function JobProgress({ jobId, onComplete }) {
     const [loading, setLoading] = useState(true);
     const [resuming, setResuming] = useState(false);
     const [generating, setGenerating] = useState(false);
+    const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
     const processingRef = useRef(false);  // FIX: guard against overlapping process calls
     const jobIdRef = useRef(jobId);       // FIX: track current jobId to avoid stale closures
@@ -135,6 +136,24 @@ export default function JobProgress({ jobId, onComplete }) {
             toast.error('Failed to resume');
         } finally {
             setResuming(false);
+        }
+    };
+
+    const handleStop = async () => {
+        if (!confirm('Stop this task? Already-processed rows will be kept.')) return;
+        setStopping(true);
+        try {
+            await base44.functions.invoke('jobProcessor', {
+                action: 'stop',
+                job_id: jobId
+            });
+            toast.success('Task stopped');
+            processingRef.current = false;
+            await loadJobStatus();
+        } catch (error) {
+            toast.error('Failed to stop task');
+        } finally {
+            setStopping(false);
         }
     };
 
@@ -258,13 +277,48 @@ export default function JobProgress({ jobId, onComplete }) {
                     </div>
                 )}
 
+                {/* Token usage & cost */}
+                {job.status === 'done' && (job.total_input_tokens > 0 || job.estimated_cost_usd > 0) && (
+                    <div className="p-3 bg-slate-50 rounded-lg text-sm space-y-1">
+                        <div className="flex justify-between">
+                            <span className="text-slate-500">Tokens:</span>
+                            <span className="font-medium">
+                                {(job.total_input_tokens || 0).toLocaleString()} in / {(job.total_output_tokens || 0).toLocaleString()} out
+                            </span>
+                        </div>
+                        {job.estimated_cost_usd > 0 && (
+                            <div className="flex justify-between">
+                                <span className="text-slate-500">Estimated cost:</span>
+                                <span className="font-medium text-green-700">
+                                    ${job.estimated_cost_usd < 0.01 ? '<0.01' : job.estimated_cost_usd.toFixed(4)}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Actions */}
                 <div className="flex gap-2 pt-2">
                     {isActive && (
-                        <Button disabled className="flex-1 gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Processing...
-                        </Button>
+                        <>
+                            <Button disabled className="flex-1 gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Processing...
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                onClick={handleStop}
+                                disabled={stopping}
+                                className="gap-2"
+                            >
+                                {stopping ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <XCircle className="w-4 h-4" />
+                                )}
+                                Stop
+                            </Button>
+                        </>
                     )}
 
                     {job.status === 'error' && statusCounts && statusCounts.pending > 0 && (

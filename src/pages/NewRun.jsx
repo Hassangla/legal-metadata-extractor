@@ -5,6 +5,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { 
     ArrowLeft, ArrowRight, Play, AlertCircle, CheckCircle, 
@@ -27,6 +28,7 @@ export default function NewRun() {
     const [createdJobId, setCreatedJobId] = useState(null);
     const [creating, setCreating] = useState(false);
     const [hasSpec, setHasSpec] = useState(true);
+    const [taskName, setTaskName] = useState('');
 
     useEffect(() => {
         checkSpec();
@@ -66,7 +68,8 @@ export default function NewRun() {
                 input_file_url: parsedFile.file_url,
                 input_file_name: parsedFile.file_name,
                 total_rows: parsedFile.total_rows,
-                input_rows: parsedFile.rows
+                input_rows: parsedFile.rows,
+                task_name: taskName
             });
 
             setCreatedJobId(response.data.job.id);
@@ -278,6 +281,18 @@ export default function NewRun() {
                                             Web Search: {selectedWebSearch === 'none' ? 'Disabled' : selectedWebSearch}
                                         </p>
                                     </div>
+                                </div>
+
+                                <div className="p-4 bg-slate-50 rounded-lg">
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                                        Task Name (optional)
+                                    </label>
+                                    <Input
+                                        value={taskName}
+                                        onChange={(e) => setTaskName(e.target.value)}
+                                        placeholder="e.g. Slovenia batch Q1 2026"
+                                        className="max-w-md"
+                                    />
                                 </div>
 
                                 <div className="p-4 bg-green-50 rounded-lg border border-green-200">
