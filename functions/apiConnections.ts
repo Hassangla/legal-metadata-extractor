@@ -96,27 +96,52 @@ Deno.serve(async (req) => {
                 });
             }
             
-            case 'test': {
-                const { connection_id, api_key } = params;
+            case 'testNew': {
+                const { base_url, api_key } = params;
                 
-                let apiKey = api_key;
-                let baseUrl;
-                
-                if (connection_id) {
-                    const connections = await base44.entities.APIConnection.filter({ id: connection_id });
-                    if (!connections.length) {
-                        return Response.json({ error: 'Connection not found' }, { status: 404 });
-                    }
-                    const conn = connections[0];
-                    baseUrl = conn.base_url;
-                    if (!apiKey) {
-                        apiKey = await decryptAndMigrate(conn, base44);
-                    }
-                } else {
-                    baseUrl = params.base_url?.replace(/\/$/, '');
+                if (!base_url || !api_key) {
+                    return Response.json({ error: 'base_url and api_key are required' }, { status: 400 });
                 }
                 
-                const response = await fetch(`${baseUrl}/v1/models`, {
+                const cleanUrl = base_url.replace(/\/$/, '');
+                const response = await fetch(`${cleanUrl}/v1/models`, {
+                    headers: {
+                        'Authorization': `Bearer ${api_key}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    return Response.json({ 
+                        success: false, 
+                        error: `API returned ${response.status}: ${errorText}` 
+                    });
+                }
+                
+                const data = await response.json();
+                return Response.json({ 
+                    success: true, 
+                    models: data.data || data.models || [] 
+                });
+            }
+            
+            case 'testExisting': {
+                const { connection_id } = params;
+                
+                if (!connection_id) {
+                    return Response.json({ error: 'connection_id is required' }, { status: 400 });
+                }
+                
+                const connections = await base44.entities.APIConnection.filter({ id: connection_id });
+                if (!connections.length) {
+                    return Response.json({ error: 'Connection not found' }, { status: 404 });
+                }
+                
+                const conn = connections[0];
+                const apiKey = await decryptAndMigrate(conn, base44);
+                
+                const response = await fetch(`${conn.base_url}/v1/models`, {
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
                         'Content-Type': 'application/json'
@@ -133,12 +158,10 @@ Deno.serve(async (req) => {
                 
                 const data = await response.json();
                 
-                if (connection_id) {
-                    await base44.entities.APIConnection.update(connection_id, {
-                        is_valid: true,
-                        last_tested_at: new Date().toISOString()
-                    });
-                }
+                await base44.entities.APIConnection.update(connection_id, {
+                    is_valid: true,
+                    last_tested_at: new Date().toISOString()
+                });
                 
                 return Response.json({ 
                     success: true, 

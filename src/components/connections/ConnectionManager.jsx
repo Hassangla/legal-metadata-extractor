@@ -46,9 +46,9 @@ export default function ConnectionManager({ onSelect, selectedId }) {
 
         setCreating(true);
         try {
-            // First test the connection
+            // Test with raw credentials (nothing stored yet)
             const testResponse = await base44.functions.invoke('apiConnections', {
-                action: 'test',
+                action: 'testNew',
                 base_url: newConnection.base_url,
                 api_key: newConnection.api_key
             });
@@ -59,14 +59,17 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                 return;
             }
 
-            // Create the connection
-            const response = await base44.functions.invoke('apiConnections', {
+            // Create the connection (server encrypts the key)
+            await base44.functions.invoke('apiConnections', {
                 action: 'create',
-                ...newConnection
+                name: newConnection.name,
+                base_url: newConnection.base_url,
+                api_key: newConnection.api_key
             });
 
             toast.success('Connection created successfully');
             setShowCreate(false);
+            // Clear api_key from state immediately
             setNewConnection({ name: '', base_url: '', api_key: '' });
             loadConnections();
         } catch (error) {
@@ -80,7 +83,7 @@ export default function ConnectionManager({ onSelect, selectedId }) {
         setTesting(connectionId);
         try {
             const response = await base44.functions.invoke('apiConnections', {
-                action: 'test',
+                action: 'testExisting',
                 connection_id: connectionId
             });
 
