@@ -88,7 +88,11 @@ Deno.serve(async (req) => {
         // Fix 10: Use chunked base64 conversion
         const base64Data = uint8ArrayToBase64(new Uint8Array(buffer));
         
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        // Use Washington DC timezone (US/Eastern)
+        const now = new Date();
+        const eastern = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const pad = (n) => String(n).padStart(2, '0');
+        const timestamp = `${eastern.getFullYear()}-${pad(eastern.getMonth() + 1)}-${pad(eastern.getDate())}T${pad(eastern.getHours())}-${pad(eastern.getMinutes())}-${pad(eastern.getSeconds())}`;
         const filename = `legal_metadata_output_${timestamp}.xlsx`;
         
         return Response.json({ 
