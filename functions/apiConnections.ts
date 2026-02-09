@@ -266,9 +266,10 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
-    // OpenAI direct: GPT-4o, o-series, chatgpt-4o support web search
+    // OpenAI direct: GPT-4o/4.1/4.5, o-series, chatgpt-4o support web search
     if (providerKey === 'openai') {
-        if (id.includes('gpt-4o') || id.includes('gpt-4-turbo') ||
+        if (id.includes('gpt-4o') || id.includes('gpt-4.1') || id.includes('gpt-4.5') ||
+            id.includes('gpt-4-turbo') ||
             id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4') ||
             id.startsWith('chatgpt-4o')) {
             return { supports: true, options: ['web_search_preview'] };
@@ -281,7 +282,8 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         if (id.includes('anthropic/claude')) {
             return { supports: true, options: ['web_search'] };
         }
-        if (id.includes('openai/gpt-4o') || id.includes('openai/chatgpt-4o') ||
+        if (id.includes('openai/gpt-4o') || id.includes('openai/gpt-4.1') ||
+            id.includes('openai/gpt-4.5') || id.includes('openai/chatgpt-4o') ||
             id.match(/openai\/o[134]/)) {
             return { supports: true, options: ['web_search_preview'] };
         }
