@@ -6,7 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { 
     Play, Pause, Download, RefreshCw, Loader2, CheckCircle, 
-    XCircle, AlertCircle, Clock, FileSpreadsheet
+    XCircle, AlertCircle, Clock
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -14,36 +14,47 @@ export default function JobProgress({ jobId, onComplete }) {
     const [job, setJob] = useState(null);
     const [statusCounts, setStatusCounts] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [processing, setProcessing] = useState(false);
+    const [resuming, setResuming] = useState(false);
     const [generating, setGenerating] = useState(false);
     const pollRef = useRef(null);
+    const kickedRef = useRef(false);
 
     useEffect(() => {
         if (jobId) {
+            kickedRef.current = false;
             loadJobStatus();
         }
         return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-            }
+            if (pollRef.current) clearInterval(pollRef.current);
         };
     }, [jobId]);
 
+    // Auto-kick processing once if job is queued/running with pending rows
     useEffect(() => {
-        if (job?.status === 'running' || processing) {
-            // Poll every 3 seconds while running
-            pollRef.current = setInterval(loadJobStatus, 3000);
-        } else {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-            }
+        if (!job || kickedRef.current) return;
+
+        const needsKick = (job.status === 'queued' || job.status === 'running') &&
+                          statusCounts && statusCounts.pending > 0;
+
+        if (needsKick) {
+            kickedRef.current = true;
+            kickProcessing();
         }
+    }, [job?.status, statusCounts]);
+
+    // Poll while job is active
+    useEffect(() => {
+        if (pollRef.current) clearInterval(pollRef.current);
+
+        const isActive = job?.status === 'queued' || job?.status === 'running';
+        if (isActive) {
+            pollRef.current = setInterval(loadJobStatus, 3000);
+        }
+
         return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-            }
+            if (pollRef.current) clearInterval(pollRef.current);
         };
-    }, [job?.status, processing]);
+    }, [job?.status]);
 
     const loadJobStatus = async () => {
         try {
@@ -64,25 +75,43 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     };
 
-    const processNextBatch = async () => {
-        setProcessing(true);
+    const kickProcessing = async () => {
+        // Fire-and-forget: call 'start' once. Server handles the loop.
+        // We don't await because the call may take up to 25s processing rows.
+        base44.functions.invoke('jobProcessor', {
+            action: 'start',
+            job_id: jobId
+        }).then((response) => {
+            // After server returns (time budget exhausted or done), refresh status
+            loadJobStatus();
+            // If there are still pending rows and job is running, kick again
+            if (response.data?.job?.status === 'running') {
+                const rows = statusCounts;
+                // Re-kick if needed (server finished its time budget)
+                setTimeout(() => {
+                    base44.functions.invoke('jobProcessor', {
+                        action: 'start',
+                        job_id: jobId
+                    }).then(() => loadJobStatus());
+                }, 1000);
+            }
+        }).catch(() => {
+            // Silently handle — poll will pick up status
+        });
+    };
+
+    const handleResume = async () => {
+        setResuming(true);
         try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'process',
+            await base44.functions.invoke('jobProcessor', {
+                action: 'start',
                 job_id: jobId
             });
-            setJob(response.data.job);
-            
-            if (response.data.remaining > 0 && response.data.job.status !== 'error') {
-                // Continue processing
-                setTimeout(processNextBatch, 1000);
-            } else {
-                setProcessing(false);
-                loadJobStatus();
-            }
+            await loadJobStatus();
         } catch (error) {
-            toast.error('Processing error');
-            setProcessing(false);
+            toast.error('Failed to resume');
+        } finally {
+            setResuming(false);
         }
     };
 
@@ -94,7 +123,6 @@ export default function JobProgress({ jobId, onComplete }) {
             });
 
             if (response.data.success) {
-                // Convert base64 to blob and download
                 const byteCharacters = atob(response.data.data);
                 const byteNumbers = new Array(byteCharacters.length);
                 for (let i = 0; i < byteCharacters.length; i++) {
@@ -129,24 +157,23 @@ export default function JobProgress({ jobId, onComplete }) {
         );
     }
 
-    if (!job) {
-        return null;
-    }
+    if (!job) return null;
 
     const progress = job.total_rows > 0 
         ? Math.round((job.processed_rows / job.total_rows) * 100) 
         : 0;
 
-    const statusConfig = {
-        queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Queued' },
+    const statusConfigMap = {
+        queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Starting...' },
         running: { icon: RefreshCw, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Processing' },
         done: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-100', label: 'Completed' },
         error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' },
         paused: { icon: Pause, color: 'text-slate-500', bg: 'bg-slate-100', label: 'Paused' }
     };
 
-    const status = statusConfig[job.status] || statusConfig.queued;
+    const status = statusConfigMap[job.status] || statusConfigMap.queued;
     const StatusIcon = status.icon;
+    const isActive = job.status === 'queued' || job.status === 'running';
 
     return (
         <Card>
@@ -154,7 +181,7 @@ export default function JobProgress({ jobId, onComplete }) {
                 <div className="flex items-center justify-between">
                     <CardTitle className="text-lg">Job Progress</CardTitle>
                     <Badge className={`${status.bg} ${status.color}`}>
-                        <StatusIcon className={`w-3 h-3 mr-1 ${job.status === 'running' ? 'animate-spin' : ''}`} />
+                        <StatusIcon className={`w-3 h-3 mr-1 ${isActive ? 'animate-spin' : ''}`} />
                         {status.label}
                     </Badge>
                 </div>
@@ -210,28 +237,25 @@ export default function JobProgress({ jobId, onComplete }) {
 
                 {/* Actions */}
                 <div className="flex gap-2 pt-2">
-                    {job.status === 'queued' && (
+                    {isActive && (
+                        <Button disabled className="flex-1 gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Processing...
+                        </Button>
+                    )}
+
+                    {job.status === 'error' && statusCounts && statusCounts.pending > 0 && (
                         <Button
-                            onClick={processNextBatch}
-                            disabled={processing}
+                            onClick={handleResume}
+                            disabled={resuming}
                             className="flex-1 gap-2 bg-slate-900 hover:bg-slate-800"
                         >
-                            {processing ? (
+                            {resuming ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
                                 <Play className="w-4 h-4" />
                             )}
-                            Start Processing
-                        </Button>
-                    )}
-
-                    {job.status === 'running' && (
-                        <Button
-                            disabled
-                            className="flex-1 gap-2"
-                        >
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Processing...
+                            Resume Processing
                         </Button>
                     )}
 
