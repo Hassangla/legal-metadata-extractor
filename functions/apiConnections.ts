@@ -608,24 +608,26 @@ Deno.serve(async (req) => {
                     }
                 }
 
-                // Re-apply web search detection on cached models that still have null.
-                // This patches models cached before detectWebSearch was expanded.
+                // Re-apply web search detection on ALL cached models.
+                // This patches models cached before detectWebSearch was expanded,
+                // including ones previously marked false that may now be detected as true.
                 if (conn && models.length > 0) {
                     const pk = conn.provider_type || 'openai_compatible';
                     for (const m of models) {
-                        if (m.supports_web_search === null || m.supports_web_search === undefined) {
-                            const ws = detectWebSearch(pk, m.model_id, conn.base_url);
-                            if (ws.supports !== null) {
-                                try {
-                                    await base44.entities.ModelCatalog.update(m.id, {
-                                        supports_web_search: ws.supports,
-                                        web_search_options: ws.options,
-                                        last_checked_at: new Date().toISOString(),
-                                    });
-                                    m.supports_web_search = ws.supports;
-                                    m.web_search_options = ws.options;
-                                } catch (_) {}
-                            }
+                        const ws = detectWebSearch(pk, m.model_id, conn.base_url);
+                        if (ws.supports !== null && (
+                            m.supports_web_search !== ws.supports ||
+                            JSON.stringify(m.web_search_options || []) !== JSON.stringify(ws.options)
+                        )) {
+                            try {
+                                await base44.entities.ModelCatalog.update(m.id, {
+                                    supports_web_search: ws.supports,
+                                    web_search_options: ws.options,
+                                    last_checked_at: new Date().toISOString(),
+                                });
+                                m.supports_web_search = ws.supports;
+                                m.web_search_options = ws.options;
+                            } catch (_) {}
                         }
                     }
                 }
