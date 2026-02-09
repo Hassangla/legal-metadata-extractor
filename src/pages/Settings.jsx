@@ -34,18 +34,41 @@ export default function Settings() {
         }
     };
 
-    // Fix 12: Deterministic CSV import via backend — no AI extraction
     const handleImportCodes = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         setImporting(true);
         try {
-            const { file_url } = await base44.integrations.Core.UploadFile({ file });
-            
+            // Read CSV directly in the browser — no upload needed
+            const text = await file.text();
+            const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+            if (lines.length < 2) {
+                toast.error('CSV file is empty or has no data rows');
+                return;
+            }
+
+            const delimiter = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
+            const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+            const economyIdx = headers.findIndex(h => ['economy', 'economy_name', 'name'].includes(h));
+            const codeIdx = headers.findIndex(h => ['economy_code', 'code', 'iso_code'].includes(h));
+
+            if (economyIdx === -1 || codeIdx === -1) {
+                toast.error('CSV must have "economy" and "economy_code" columns');
+                return;
+            }
+
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(delimiter).map(v => v.trim().replace(/^["']|["']$/g, ''));
+                if (values[economyIdx] && values[codeIdx]) {
+                    data.push({ economy: values[economyIdx], economy_code: values[codeIdx] });
+                }
+            }
+
             const response = await base44.functions.invoke('economyCodes', {
-                action: 'importFromCsv',
-                file_url
+                action: 'import',
+                data
             });
 
             toast.success(`Imported ${response.data.imported} economy codes`);
@@ -54,7 +77,6 @@ export default function Settings() {
             toast.error(error?.response?.data?.error || 'Failed to import economy codes');
         } finally {
             setImporting(false);
-            // Reset file input
             e.target.value = '';
         }
     };
