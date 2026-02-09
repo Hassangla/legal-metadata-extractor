@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,111 +17,97 @@ export default function JobProgress({ jobId, onComplete }) {
     const [resuming, setResuming] = useState(false);
     const [generating, setGenerating] = useState(false);
     const pollRef = useRef(null);
-    const processingRef = useRef(false);
-    const jobIdRef = useRef(jobId);
-
-    useEffect(() => {
-        jobIdRef.current = jobId;
-    }, [jobId]);
+    const kickedRef = useRef(false);
 
     useEffect(() => {
         if (jobId) {
-            processingRef.current = false;
+            kickedRef.current = false;
             loadJobStatus();
         }
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
-            processingRef.current = false;
         };
     }, [jobId]);
 
-    const loadJobStatus = useCallback(async () => {
-        try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'getStatus',
-                job_id: jobIdRef.current
-            });
-            const jobData = response.data.job;
-            const counts = response.data.statusCounts;
-            setJob(jobData);
-            setStatusCounts(counts);
-            
-            if (jobData.status === 'done') {
-                onComplete?.(jobData);
-            }
-
-            return { jobData, counts };
-        } catch (error) {
-            console.error('Failed to load job status:', error);
-            return null;
-        } finally {
-            setLoading(false);
-        }
-    }, [onComplete]);
-
-    // Auto-kick processing with sequential batch continuation
+    // Auto-kick processing once if job is queued/running with pending rows
     useEffect(() => {
-        if (!job) return;
+        if (!job || kickedRef.current) return;
 
-        const isActive = job.status === 'queued' || job.status === 'running';
-        const hasPending = statusCounts && statusCounts.pending > 0;
+        const needsKick = (job.status === 'queued' || job.status === 'running') &&
+                          statusCounts && statusCounts.pending > 0;
 
-        if (isActive && hasPending && !processingRef.current) {
-            processingRef.current = true;
-            processNextBatch();
+        if (needsKick) {
+            kickedRef.current = true;
+            kickProcessing();
         }
-    }, [job?.status, statusCounts?.pending]);
+    }, [job?.status, statusCounts]);
 
-    // Sequential batch processor
-    const processNextBatch = async () => {
-        try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'process',
-                job_id: jobIdRef.current
-            });
-
-            const result = await loadJobStatus();
-
-            if (result && 
-                result.counts.pending > 0 && 
-                (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
-                await new Promise(r => setTimeout(r, 500));
-                if (processingRef.current) {
-                    processNextBatch();
-                }
-            } else {
-                processingRef.current = false;
-            }
-        } catch (error) {
-            console.error('Batch processing error:', error);
-            processingRef.current = false;
-            await loadJobStatus();
-        }
-    };
-
-    // Poll for status updates while processing (read-only)
+    // Poll while job is active
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
 
         const isActive = job?.status === 'queued' || job?.status === 'running';
         if (isActive) {
-            pollRef.current = setInterval(loadJobStatus, 5000);
+            pollRef.current = setInterval(loadJobStatus, 3000);
         }
 
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
         };
-    }, [job?.status, loadJobStatus]);
+    }, [job?.status]);
+
+    const loadJobStatus = async () => {
+        try {
+            const response = await base44.functions.invoke('jobProcessor', {
+                action: 'getStatus',
+                job_id: jobId
+            });
+            setJob(response.data.job);
+            setStatusCounts(response.data.statusCounts);
+            
+            if (response.data.job.status === 'done') {
+                onComplete?.(response.data.job);
+            }
+        } catch (error) {
+            console.error('Failed to load job status:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const kickProcessing = async () => {
+        // Fire-and-forget: call 'start' once. Server handles the loop.
+        // We don't await because the call may take up to 25s processing rows.
+        base44.functions.invoke('jobProcessor', {
+            action: 'start',
+            job_id: jobId
+        }).then((response) => {
+            // After server returns (time budget exhausted or done), refresh status
+            loadJobStatus();
+            // If there are still pending rows and job is running, kick again
+            if (response.data?.job?.status === 'running') {
+                const rows = statusCounts;
+                // Re-kick if needed (server finished its time budget)
+                setTimeout(() => {
+                    base44.functions.invoke('jobProcessor', {
+                        action: 'start',
+                        job_id: jobId
+                    }).then(() => loadJobStatus());
+                }, 1000);
+            }
+        }).catch(() => {
+            // Silently handle — poll will pick up status
+        });
+    };
 
     const handleResume = async () => {
         setResuming(true);
         try {
             await base44.functions.invoke('jobProcessor', {
-                action: 'process',
+                action: 'start',
                 job_id: jobId
             });
             await loadJobStatus();
-            processingRef.current = false;
         } catch (error) {
             toast.error('Failed to resume');
         } finally {
@@ -201,6 +187,7 @@ export default function JobProgress({ jobId, onComplete }) {
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
+                {/* Progress bar */}
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                         <span className="text-slate-500">Progress</span>
@@ -209,6 +196,7 @@ export default function JobProgress({ jobId, onComplete }) {
                     <Progress value={progress} className="h-2" />
                 </div>
 
+                {/* Status counts */}
                 {statusCounts && (
                     <div className="grid grid-cols-4 gap-2 text-center">
                         <div className="p-2 bg-slate-50 rounded-lg">
@@ -230,12 +218,14 @@ export default function JobProgress({ jobId, onComplete }) {
                     </div>
                 )}
 
+                {/* Job details */}
                 <div className="text-sm text-slate-500 space-y-1">
                     <p><span className="font-medium">Connection:</span> {job.connection_name}</p>
                     <p><span className="font-medium">Model:</span> {job.model_name}</p>
                     <p><span className="font-medium">Input:</span> {job.input_file_name}</p>
                 </div>
 
+                {/* Error message */}
                 {job.error_message && (
                     <div className="p-3 bg-red-50 rounded-lg">
                         <div className="flex items-start gap-2">
@@ -245,6 +235,7 @@ export default function JobProgress({ jobId, onComplete }) {
                     </div>
                 )}
 
+                {/* Actions */}
                 <div className="flex gap-2 pt-2">
                     {isActive && (
                         <Button disabled className="flex-1 gap-2">
