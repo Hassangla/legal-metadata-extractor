@@ -5,7 +5,7 @@ Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
         const user = await base44.auth.me();
-        
+
         if (!user) {
             return Response.json({ error: 'Unauthorized' }, { status: 401 });
         }
@@ -13,152 +13,119 @@ Deno.serve(async (req) => {
         let body;
         try {
             body = await req.json();
-        } catch (e) {
-            return Response.json({ error: 'Invalid request body — expected JSON with file_url' }, { status: 400 });
+        } catch (_) {
+            return Response.json({ error: 'Invalid request body. Expected JSON with file_url.' }, { status: 400 });
         }
 
         const { file_url } = body;
-        
+
         if (!file_url) {
-            return Response.json({ error: 'file_url is required but was empty or missing' }, { status: 400 });
+            return Response.json({ error: 'file_url is required but was empty or missing.' }, { status: 400 });
         }
-        
-        // Fetch the uploaded file
+
+        // ── Step 1: Download the uploaded file ──────────────────
         let response;
         try {
             response = await fetch(file_url);
         } catch (fetchError) {
-            return Response.json({ 
-                error: `Could not download the uploaded file. Network error: ${fetchError.message}` 
+            return Response.json({
+                error: `Could not download file. Network error: ${fetchError.message}`
             }, { status: 500 });
         }
 
         if (!response.ok) {
-            return Response.json({ 
-                error: `Could not download the uploaded file. Server returned HTTP ${response.status}. The upload URL may have expired — please try uploading again.` 
+            return Response.json({
+                error: `Could not download file (HTTP ${response.status}). The upload URL may have expired — try uploading again.`
             }, { status: 500 });
         }
-        
-        let arrayBuffer;
-        try {
-            arrayBuffer = await response.arrayBuffer();
-        } catch (e) {
-            return Response.json({ 
-                error: `File downloaded but could not be read into memory: ${e.message}` 
-            }, { status: 500 });
-        }
+
+        const arrayBuffer = await response.arrayBuffer();
 
         if (arrayBuffer.byteLength === 0) {
             return Response.json({ error: 'The uploaded file is empty (0 bytes).' }, { status: 400 });
         }
-        
-        // Parse Excel
+
+        // ── Step 2: Parse Excel ─────────────────────────────────
         let workbook;
         try {
             workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
         } catch (parseError) {
-            return Response.json({ 
-                error: `Could not parse Excel file. Make sure it is a valid .xlsx or .xls file. Detail: ${parseError.message}` 
+            return Response.json({
+                error: `Could not parse file as Excel. Make sure it is a valid .xlsx or .xls. Detail: ${parseError.message}`
             }, { status: 400 });
         }
-        
-        // Get first sheet
+
         if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-            return Response.json({ error: 'Excel file has no sheets.' }, { status: 400 });
+            return Response.json({ error: 'Excel file contains no sheets.' }, { status: 400 });
         }
 
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        
+
         if (!worksheet) {
-            return Response.json({ error: `Sheet "${sheetName}" is empty or could not be read.` }, { status: 400 });
+            return Response.json({ error: `Sheet "${sheetName}" is empty or unreadable.` }, { status: 400 });
         }
 
-        // Convert to JSON
+        // ── Step 3: Convert to row objects ──────────────────────
         let data;
         try {
             data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
         } catch (e) {
-            return Response.json({ 
-                error: `Failed to convert sheet to rows: ${e.message}` 
+            return Response.json({
+                error: `Failed to convert sheet to rows: ${e.message}`
             }, { status: 400 });
         }
-        
+
         if (!data || data.length === 0) {
-            return Response.json({ 
-                error: 'The first sheet has no data rows. Make sure row 1 has column headers and row 2+ has data.' 
+            return Response.json({
+                error: 'The first sheet has no data rows. Row 1 should have headers, row 2+ should have data.'
             }, { status: 400 });
         }
-        
+
         const headers = Object.keys(data[0]);
-        
-        // Flexible column matching — supports variations like "Legal basis", "Legal_basis", "legal_basis"
-        const COLUMN_ALIASES = {
-            'Owner':       ['owner'],
-            'Economy':     ['economy'],
-            'Legal basis': ['legal basis', 'legal_basis', 'legalbasis', 'legal basis '],
-            'Question':    ['question'],
-            'Topic':       ['topic'],
-        };
 
-        function findColumn(headers, aliases) {
-            for (const h of headers) {
-                const normalized = h.toLowerCase().trim().replace(/_/g, ' ');
-                if (aliases.some(a => a === normalized)) return h;
-            }
-            return null;
-        }
-
-        const columnMap = {};
-        const missingColumns = [];
-        for (const [standard, aliases] of Object.entries(COLUMN_ALIASES)) {
-            const found = findColumn(headers, aliases);
-            if (found) {
-                columnMap[standard] = found;
-            } else {
-                missingColumns.push(standard);
-            }
-        }
-        
-        if (missingColumns.length > 0) {
-            return Response.json({ 
-                error: `Missing required columns: ${missingColumns.join(', ')}. Found columns: ${headers.join(', ')}`,
-                found_columns: headers
+        if (headers.length === 0) {
+            return Response.json({
+                error: 'No columns detected. Make sure row 1 contains column headers.'
             }, { status: 400 });
         }
-        
-        // Normalize column names to standard keys
-        const normalizedData = data.map(row => {
-            return {
-                Owner:       String(row[columnMap['Owner']] || '').trim(),
-                Economy:     String(row[columnMap['Economy']] || '').trim(),
-                Legal_basis: String(row[columnMap['Legal basis']] || '').trim(),
-                Question:    String(row[columnMap['Question']] || '').trim(),
-                Topic:       String(row[columnMap['Topic']] || '').trim(),
-            };
+
+        // ── Step 4: Pass through ALL columns as-is ──────────────
+        // No hardcoded column validation. No renaming. No dropping.
+        // The Specification (system prompt) defines what columns mean.
+        // The LLM interprets them at runtime.
+        const rows = data.map(row => {
+            const cleaned = {};
+            for (const [key, value] of Object.entries(row)) {
+                const trimmedKey = key.trim();
+                if (trimmedKey) {
+                    cleaned[trimmedKey] = typeof value === 'string' ? value.trim() : value;
+                }
+            }
+            return cleaned;
         });
 
-        // Filter out completely empty rows
-        const filteredData = normalizedData.filter(row => 
-            row.Owner || row.Economy || row.Legal_basis || row.Question || row.Topic
+        // Filter out completely empty rows (all values blank)
+        const nonEmptyRows = rows.filter(row =>
+            Object.values(row).some(v => v !== '' && v !== null && v !== undefined)
         );
 
-        if (filteredData.length === 0) {
-            return Response.json({ 
-                error: 'All rows are empty. Make sure data starts in row 2.' 
+        if (nonEmptyRows.length === 0) {
+            return Response.json({
+                error: 'All data rows are empty. Make sure your data starts in row 2.'
             }, { status: 400 });
         }
-        
-        return Response.json({ 
+
+        return Response.json({
             success: true,
-            rows: filteredData,
-            total_rows: filteredData.length,
-            columns: headers
+            rows: nonEmptyRows,
+            total_rows: nonEmptyRows.length,
+            columns: headers.map(h => h.trim()).filter(Boolean)
         });
-        
+
     } catch (error) {
-        return Response.json({ 
-            error: `Unexpected error processing file: ${error.message}` 
+        return Response.json({
+            error: `Unexpected error: ${error.message}`
         }, { status: 500 });
     }
 });
