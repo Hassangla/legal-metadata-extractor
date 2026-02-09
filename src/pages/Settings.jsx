@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Server, Globe, Upload, Loader2, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, Server, Globe, Upload, Loader2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 import ConnectionManager from '@/components/connections/ConnectionManager';
@@ -34,44 +34,28 @@ export default function Settings() {
         }
     };
 
+    // Fix 12: Deterministic CSV import via backend — no AI extraction
     const handleImportCodes = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         setImporting(true);
         try {
-            // Upload and parse the file
             const { file_url } = await base44.integrations.Core.UploadFile({ file });
             
-            const extractResult = await base44.integrations.Core.ExtractDataFromUploadedFile({
-                file_url,
-                json_schema: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            economy: { type: 'string' },
-                            economy_code: { type: 'string' }
-                        }
-                    }
-                }
+            const response = await base44.functions.invoke('economyCodes', {
+                action: 'importFromCsv',
+                file_url
             });
 
-            if (extractResult.status === 'success' && extractResult.output) {
-                const response = await base44.functions.invoke('economyCodes', {
-                    action: 'import',
-                    data: extractResult.output
-                });
-
-                toast.success(`Imported ${response.data.imported} economy codes`);
-                loadEconomyCodes();
-            } else {
-                toast.error('Failed to parse CSV file');
-            }
+            toast.success(`Imported ${response.data.imported} economy codes`);
+            loadEconomyCodes();
         } catch (error) {
-            toast.error('Failed to import economy codes');
+            toast.error(error?.response?.data?.error || 'Failed to import economy codes');
         } finally {
             setImporting(false);
+            // Reset file input
+            e.target.value = '';
         }
     };
 

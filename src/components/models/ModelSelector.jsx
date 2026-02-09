@@ -209,20 +209,26 @@ export default function ModelSelector({
                         </div>
                     )}
 
-                    {selectedModel && selectedModelData?.supports_web_search === false && (
+                    {selectedModel && (webSearchOptions.length === 0) && (
                         <div className="space-y-2">
                             <Label>Web Search Tool</Label>
                             <Select value="none" disabled>
                                 <SelectTrigger className="opacity-50">
-                                    <SelectValue placeholder="Not available for this model" />
+                                    <SelectValue placeholder="Not available" />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Not available</SelectItem>
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-500">
-                                This model doesn't support web search tools
-                            </p>
+                            {selectedModelData?.supports_web_search === null ? (
+                                <p className="text-xs text-slate-500">
+                                    Click "Check Web Search" to detect capabilities
+                                </p>
+                            ) : (
+                                <p className="text-xs text-slate-500">
+                                    This model doesn't support web search tools
+                                </p>
+                            )}
                         </div>
                     )}
                 </div>

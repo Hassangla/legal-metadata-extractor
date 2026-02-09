@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { 
     ArrowLeft, Download, Eye, RefreshCw, Loader2, Clock, 
-    CheckCircle, XCircle, Play, Search, FileSpreadsheet
+    CheckCircle, XCircle, Play, Search, FileSpreadsheet, RotateCcw
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -24,6 +24,7 @@ export default function History() {
     const [selectedJobId, setSelectedJobId] = useState(initialJobId);
     const [searchTerm, setSearchTerm] = useState('');
     const [generating, setGenerating] = useState(null);
+    const [rerunning, setRerunning] = useState(null);
 
     useEffect(() => {
         loadJobs();
@@ -72,6 +73,27 @@ export default function History() {
         }
     };
 
+    // Fix 11: Rerun functionality
+    const handleRerun = async (jobId, useLatestSpec) => {
+        setRerunning(jobId);
+        try {
+            const response = await base44.functions.invoke('jobProcessor', {
+                action: 'rerun',
+                job_id: jobId,
+                use_latest_spec: useLatestSpec
+            });
+
+            const newJob = response.data.job;
+            setSelectedJobId(newJob.id);
+            toast.success('Rerun started');
+            await loadJobs();
+        } catch (error) {
+            toast.error('Failed to rerun job');
+        } finally {
+            setRerunning(null);
+        }
+    };
+
     const statusConfig = {
         queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Queued' },
         running: { icon: Play, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Running' },
@@ -83,6 +105,8 @@ export default function History() {
         job.input_file_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         job.model_id?.toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    const selectedJob = jobs.find(j => j.id === selectedJobId);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -164,8 +188,8 @@ export default function History() {
                                                             </p>
                                                         </div>
                                                     </div>
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="text-right">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="text-right mr-2">
                                                             <p className="text-sm font-medium">
                                                                 {job.processed_rows}/{job.total_rows}
                                                             </p>
@@ -182,6 +206,7 @@ export default function History() {
                                                                     downloadOutput(job.id);
                                                                 }}
                                                                 disabled={generating === job.id}
+                                                                title="Download output"
                                                             >
                                                                 {generating === job.id ? (
                                                                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -201,12 +226,53 @@ export default function History() {
                     </div>
 
                     {/* Job Details */}
-                    <div>
+                    <div className="space-y-4">
                         {selectedJobId ? (
-                            <JobProgress 
-                                jobId={selectedJobId}
-                                onComplete={() => loadJobs()}
-                            />
+                            <>
+                                <JobProgress 
+                                    jobId={selectedJobId}
+                                    onComplete={() => loadJobs()}
+                                />
+
+                                {/* Fix 11: Rerun buttons */}
+                                {selectedJob && selectedJob.status === 'done' && (
+                                    <Card>
+                                        <CardContent className="p-4">
+                                            <p className="text-sm font-medium text-slate-700 mb-3">Rerun this job</p>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="flex-1 gap-2"
+                                                    onClick={() => handleRerun(selectedJobId, false)}
+                                                    disabled={rerunning === selectedJobId}
+                                                >
+                                                    {rerunning === selectedJobId ? (
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                    ) : (
+                                                        <RotateCcw className="w-3 h-3" />
+                                                    )}
+                                                    Same Spec
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="flex-1 gap-2"
+                                                    onClick={() => handleRerun(selectedJobId, true)}
+                                                    disabled={rerunning === selectedJobId}
+                                                >
+                                                    {rerunning === selectedJobId ? (
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                    ) : (
+                                                        <RotateCcw className="w-3 h-3" />
+                                                    )}
+                                                    Latest Spec
+                                                </Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )}
+                            </>
                         ) : (
                             <Card className="border-dashed">
                                 <CardContent className="flex flex-col items-center justify-center py-16">
