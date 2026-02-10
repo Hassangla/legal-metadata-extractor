@@ -225,17 +225,22 @@ export default function Dashboard() {
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-4">
-                                                <div className="text-right">
-                                                    <p className="text-sm font-medium text-slate-900">
-                                                        {job.processed_rows}/{job.total_rows}
-                                                    </p>
-                                                    <p className="text-xs text-slate-500">rows</p>
-                                                </div>
-                                                <Badge className={`${status.bg} ${status.color}`}>
-                                                    {job.status}
-                                                </Badge>
+                                            <div className="text-right">
+                                                <p className="text-sm font-medium text-slate-900">
+                                                    {job.processed_rows}/{job.total_rows}
+                                                </p>
+                                                <p className="text-xs text-slate-500">rows</p>
                                             </div>
-                                        </Link>
+                                            <Badge className={`${status.bg} ${status.color}`}>
+                                                {job.status}
+                                            </Badge>
+                                            </div>
+                                            </Link>
+                                            {job.error_message && (
+                                            <div className="mx-4 mb-3 -mt-1 p-2 bg-red-50 rounded-md">
+                                            <p className="text-xs text-red-600 line-clamp-2">{job.error_message}</p>
+                                            </div>
+                                            )}
                                     );
                                 })}
                             </div>
