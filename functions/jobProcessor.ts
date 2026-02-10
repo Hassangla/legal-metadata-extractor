@@ -648,7 +648,7 @@ Deno.serve(async (req) => {
                 const conn = connections[0];
                 
                 if (conn?.provider_type === 'openrouter') {
-                    return Response.json({ error: 'OpenRouter connections are no longer supported. Please use OpenAI direct or another provider.' }, { status: 400 });
+                    return Response.json({ error: 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.' }, { status: 400 });
                 }
                 
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
@@ -714,8 +714,9 @@ Deno.serve(async (req) => {
                 
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
-                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'OpenRouter connections are no longer supported. Please create a new job using OpenAI direct or another supported provider.' });
-                    return Response.json({ error: 'OpenRouter connections are no longer supported.' }, { status: 400 });
+                    const msg = 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.';
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    return Response.json({ error: msg }, { status: 400 });
                 }
                 
                 let apiKey;

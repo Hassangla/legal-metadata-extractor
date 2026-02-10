@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Plus, Trash2, RefreshCw, Check, Loader2, Server, Globe, AlertTriangle, Shield } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Check, Loader2, Server, Globe, AlertTriangle, Shield, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PROVIDER_COLORS = {
@@ -49,6 +49,18 @@ export default function ConnectionManager({ onSelect, selectedId }) {
     const [newConn, setNewConn] = useState({ name: '', base_url: '', api_key: '' });
     const [detectedProvider, setDetectedProvider] = useState(null);
     const [testResult, setTestResult] = useState(null);
+    const [duplicating, setDuplicating] = useState(null);
+
+    const handleDuplicateAsOpenAI = async (conn) => {
+        setDuplicating(conn.id);
+        setNewConn({
+            name: conn.name.replace(/openrouter/i, 'OpenAI').replace(/\s*\(.*?\)\s*$/, '') + ' (OpenAI)',
+            base_url: 'https://api.openai.com',
+            api_key: '',
+        });
+        setShowCreate(true);
+        setDuplicating(null);
+    };
 
     useEffect(() => { loadConnections(); }, []);
 
@@ -280,16 +292,27 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {conn.is_valid ? (
-                                                <Badge className="bg-green-100 text-green-800">Valid</Badge>
+                                            {isLegacy ? (
+                                                <Button variant="outline" size="sm"
+                                                    onClick={(e) => { e.stopPropagation(); handleDuplicateAsOpenAI(conn); }}
+                                                    disabled={duplicating === conn.id}
+                                                    className="gap-1.5 text-xs">
+                                                    <Copy className="w-3.5 h-3.5" /> Duplicate as OpenAI
+                                                </Button>
                                             ) : (
-                                                <Badge variant="secondary">Untested</Badge>
+                                                <>
+                                                    {conn.is_valid ? (
+                                                        <Badge className="bg-green-100 text-green-800">Valid</Badge>
+                                                    ) : (
+                                                        <Badge variant="secondary">Untested</Badge>
+                                                    )}
+                                                    <Button variant="ghost" size="icon"
+                                                        onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
+                                                        disabled={testing === conn.id}>
+                                                        {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                    </Button>
+                                                </>
                                             )}
-                                            <Button variant="ghost" size="icon"
-                                                onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
-                                                disabled={testing === conn.id}>
-                                                {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                            </Button>
                                             <Button variant="ghost" size="icon"
                                                 onClick={(e) => { e.stopPropagation(); handleDelete(conn.id); }}
                                                 className="text-red-500 hover:text-red-600 hover:bg-red-50">
