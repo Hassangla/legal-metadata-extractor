@@ -10,7 +10,7 @@ import { RefreshCw, Loader2, Search, CheckCircle, XCircle, HelpCircle, Cpu, Glob
 import { toast } from 'sonner';
 
 const PROVIDER_LABELS = {
-    openai: 'OpenAI', openrouter: 'OpenRouter', anthropic: 'Anthropic',
+    openai: 'OpenAI', openrouter: 'Legacy (Removed)', anthropic: 'Anthropic',
     azure_openai: 'Azure OpenAI', groq: 'Groq', together: 'Together AI',
     mistral: 'Mistral', perplexity: 'Perplexity', google: 'Google AI',
     openai_compatible: 'OpenAI-Compatible',

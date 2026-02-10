@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 
 const PROVIDER_COLORS = {
     openai:           { bg: 'bg-emerald-100', text: 'text-emerald-800' },
-    openrouter:       { bg: 'bg-violet-100',  text: 'text-violet-800' },
+    openrouter:       { bg: 'bg-slate-100',   text: 'text-slate-500' },
     anthropic:        { bg: 'bg-orange-100',  text: 'text-orange-800' },
     azure_openai:     { bg: 'bg-blue-100',    text: 'text-blue-800' },
     groq:             { bg: 'bg-yellow-100',  text: 'text-yellow-800' },
@@ -24,7 +24,7 @@ const PROVIDER_COLORS = {
 };
 
 const PROVIDER_LABELS = {
-    openai: 'OpenAI', openrouter: 'OpenRouter', anthropic: 'Anthropic',
+    openai: 'OpenAI', openrouter: 'Legacy (Removed)', anthropic: 'Anthropic',
     azure_openai: 'Azure OpenAI', groq: 'Groq', together: 'Together AI',
     mistral: 'Mistral', perplexity: 'Perplexity', google: 'Google AI',
     openai_compatible: 'OpenAI-Compatible',
@@ -32,7 +32,6 @@ const PROVIDER_LABELS = {
 
 const PRESET_URLS = {
     openai:     'https://api.openai.com',
-    openrouter: 'https://openrouter.ai/api',
     anthropic:  'https://api.anthropic.com',
     groq:       'https://api.groq.com',
     together:   'https://api.together.xyz',
@@ -247,21 +246,25 @@ export default function ConnectionManager({ onSelect, selectedId }) {
             ) : (
                 <div className="grid gap-3">
                     {connections.map((conn) => {
+                        const isLegacy = conn.provider_type === 'openrouter';
                         const colors = PROVIDER_COLORS[conn.provider_type] || PROVIDER_COLORS.openai_compatible;
                         return (
                             <Card key={conn.id}
-                                className={`cursor-pointer transition-all ${selectedId === conn.id ? 'ring-2 ring-slate-900 bg-slate-50' : 'hover:bg-slate-50'}`}
-                                onClick={() => onSelect?.(conn.id)}>
+                                className={`transition-all ${isLegacy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} ${selectedId === conn.id && !isLegacy ? 'ring-2 ring-slate-900 bg-slate-50' : 'hover:bg-slate-50'}`}
+                                onClick={() => { if (!isLegacy) onSelect?.(conn.id); }}>
                                 <CardContent className="p-4">
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-3">
-                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${conn.is_valid ? colors.bg : 'bg-slate-100'}`}>
-                                                <Globe className={`w-5 h-5 ${conn.is_valid ? colors.text : 'text-slate-400'}`} />
+                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${conn.is_valid && !isLegacy ? colors.bg : 'bg-slate-100'}`}>
+                                                <Globe className={`w-5 h-5 ${conn.is_valid && !isLegacy ? colors.text : 'text-slate-400'}`} />
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
-                                                    <p className="font-medium text-slate-900">{conn.name}</p>
+                                                    <p className={`font-medium ${isLegacy ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{conn.name}</p>
                                                     <ProviderBadge providerType={conn.provider_type} small />
+                                                    {isLegacy && (
+                                                        <Badge className="bg-red-100 text-red-700 text-[10px]">Removed</Badge>
+                                                    )}
                                                 </div>
                                                 <p className="text-sm text-slate-500">
                                                     {conn.base_url}
