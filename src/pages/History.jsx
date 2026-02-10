@@ -226,11 +226,6 @@ export default function History() {
                                                         )}
                                                     </div>
                                                 </div>
-                                                {job.error_message && (
-                                                    <div className="mt-2 p-2 bg-red-50 rounded-md">
-                                                        <p className="text-xs text-red-600 line-clamp-2">{job.error_message}</p>
-                                                    </div>
-                                                )}
                                             </CardContent>
                                         </Card>
                                     );

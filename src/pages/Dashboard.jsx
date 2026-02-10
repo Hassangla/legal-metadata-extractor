@@ -206,42 +206,36 @@ export default function Dashboard() {
                                     const StatusIcon = status.icon;
                                     
                                     return (
-                                        <div key={job.id}>
-                                            <Link 
-                                                to={createPageUrl(`History?job=${job.id}`)}
-                                                className="flex items-center justify-between p-4 rounded-lg hover:bg-slate-50 transition-colors"
-                                            >
-                                                <div className="flex items-center gap-4">
-                                                    <div className={`w-10 h-10 rounded-lg ${status.bg} flex items-center justify-center`}>
-                                                        <StatusIcon className={`w-5 h-5 ${status.color}`} />
-                                                    </div>
-                                                    <div>
-                                                        <p className="font-medium text-slate-900">
-                                                            {job.input_file_name || 'Untitled Job'}
-                                                        </p>
-                                                        <p className="text-sm text-slate-500">
-                                                            {format(new Date(job.created_date), 'MMM d, yyyy HH:mm')}
-                                                        </p>
-                                                    </div>
+                                        <Link 
+                                            key={job.id} 
+                                            to={createPageUrl(`History?job=${job.id}`)}
+                                            className="flex items-center justify-between p-4 rounded-lg hover:bg-slate-50 transition-colors"
+                                        >
+                                            <div className="flex items-center gap-4">
+                                                <div className={`w-10 h-10 rounded-lg ${status.bg} flex items-center justify-center`}>
+                                                    <StatusIcon className={`w-5 h-5 ${status.color}`} />
                                                 </div>
-                                                <div className="flex items-center gap-4">
-                                                    <div className="text-right">
-                                                        <p className="text-sm font-medium text-slate-900">
-                                                            {job.processed_rows}/{job.total_rows}
-                                                        </p>
-                                                        <p className="text-xs text-slate-500">rows</p>
-                                                    </div>
-                                                    <Badge className={`${status.bg} ${status.color}`}>
-                                                        {job.status}
-                                                    </Badge>
+                                                <div>
+                                                    <p className="font-medium text-slate-900">
+                                                        {job.input_file_name || 'Untitled Job'}
+                                                    </p>
+                                                    <p className="text-sm text-slate-500">
+                                                        {format(new Date(job.created_date), 'MMM d, yyyy HH:mm')}
+                                                    </p>
                                                 </div>
-                                            </Link>
-                                            {job.error_message && (
-                                                <div className="mx-4 mb-3 -mt-1 p-2 bg-red-50 rounded-md">
-                                                    <p className="text-xs text-red-600 line-clamp-2">{job.error_message}</p>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                                <div className="text-right">
+                                                    <p className="text-sm font-medium text-slate-900">
+                                                        {job.processed_rows}/{job.total_rows}
+                                                    </p>
+                                                    <p className="text-xs text-slate-500">rows</p>
                                                 </div>
-                                            )}
-                                        </div>
+                                                <Badge className={`${status.bg} ${status.color}`}>
+                                                    {job.status}
+                                                </Badge>
+                                            </div>
+                                        </Link>
                                     );
                                 })}
                             </div>
