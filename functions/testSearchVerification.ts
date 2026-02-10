@@ -63,6 +63,25 @@ const MOCK_PERPLEXITY_RESPONSE = {
     ],
 };
 
+// Mock OpenAI Chat Completions with url_citation annotations in content array
+const MOCK_OPENAI_CHAT_URLCITATIONS = {
+    choices: [{
+        message: {
+            content: [
+                {
+                    type: 'text',
+                    text: 'Here is the analysis.',
+                    annotations: [
+                        { type: 'url_citation', url: 'https://chat-source.com/law1' },
+                        { type: 'url_citation', url: 'https://chat-source.com/law2' },
+                    ],
+                },
+            ],
+        },
+        finish_reason: 'stop',
+    }],
+};
+
 // ── Extraction functions (duplicated from jobProcessor for testing) ──
 
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
@@ -100,6 +119,17 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
         const citations = data?.citations || [];
         for (const c of citations) { if (typeof c === 'string' && c.startsWith('http')) urls.push(c); }
         return [...new Set(urls)];
+    }
+    // OpenAI Chat Completions web_search_preview: content may be array with url_citation annotations
+    const msg = data?.choices?.[0]?.message;
+    if (msg && Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+            if (part.annotations && Array.isArray(part.annotations)) {
+                for (const ann of part.annotations) {
+                    if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                }
+            }
+        }
     }
     return [...new Set(urls)];
 }
@@ -169,6 +199,30 @@ function runTests() {
     const emptyUrls = extractToolUrlsFromResponse('openai', null, true);
     results.push(assert(emptyUrls.length === 0, 'Null data: returns empty'));
     results.push(assert(!isNoSearchToolError('openai', null, null, false), 'Null everything: not an error'));
+
+    // Test 9: OpenAI Chat Completions url_citation extraction
+    const chatCitationUrls = extractToolUrlsFromResponse('openai', MOCK_OPENAI_CHAT_URLCITATIONS, false);
+    results.push(assert(chatCitationUrls.length === 2, 'OpenAI Chat url_citation: extracts 2 URLs'));
+    results.push(assert(chatCitationUrls.includes('https://chat-source.com/law1'), 'OpenAI Chat url_citation: contains law1'));
+
+    // Test 10: Provenance enforcement — URL in tool set passes, fabricated URL rejected
+    const provenanceToolUrls = ['https://real-source.com/law1', 'https://real-source.com/law2'];
+    const realUrl = 'https://real-source.com/law1';
+    const fakeUrl = 'https://fabricated.com/fake-law';
+    const realNorm = realUrl.replace(/\/+$/, '').toLowerCase();
+    const fakeNorm = fakeUrl.replace(/\/+$/, '').toLowerCase();
+    results.push(assert(provenanceToolUrls.some(u => u.replace(/\/+$/, '').toLowerCase() === realNorm), 'Provenance: real URL passes tool set check'));
+    results.push(assert(!provenanceToolUrls.some(u => u.replace(/\/+$/, '').toLowerCase() === fakeNorm), 'Provenance: fabricated URL rejected by tool set check'));
+
+    // Test 11: Trailing slash normalization in tool URL provenance
+    const trailingUrl = 'https://real-source.com/law1/';
+    const trailingNorm = trailingUrl.replace(/\/+$/, '').toLowerCase();
+    results.push(assert(provenanceToolUrls.some(u => u.replace(/\/+$/, '').toLowerCase() === trailingNorm), 'Provenance: trailing slash normalized in tool set'));
+
+    // Test 12: Silent tool failure detection (no URLs returned = fail closed)
+    const noToolUrlsData = { choices: [{ message: { content: 'Some analysis without URLs' }, finish_reason: 'stop' }] };
+    const noToolUrls = extractToolUrlsFromResponse('openai', noToolUrlsData, false);
+    results.push(assert(noToolUrls.length === 0, 'Silent failure: no tool URLs returns empty array'));
 
     return results;
 }
