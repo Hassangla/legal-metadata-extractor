@@ -647,6 +647,11 @@ Deno.serve(async (req) => {
 
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 const conn = connections[0];
+                
+                if (conn?.provider_type === 'openrouter') {
+                    return Response.json({ error: 'OpenRouter connections are no longer supported. Please use OpenAI direct or another provider.' }, { status: 400 });
+                }
+                
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 const model = models[0];
 
