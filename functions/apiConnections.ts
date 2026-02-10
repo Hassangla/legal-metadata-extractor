@@ -586,8 +586,10 @@ Deno.serve(async (req) => {
                 return Response.json({ models, provider_type: providerKey });
             }
 
-            case 'probeWebSearch': {
+            case 'verifyWebSearch': {
                 const { connection_id, model_id } = params;
+                if (!connection_id || !model_id) return Response.json({ error: 'connection_id and model_id required' }, { status: 400 });
+
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 if (!connections.length) return Response.json({ error: 'Not found' }, { status: 404 });
 
@@ -595,62 +597,214 @@ Deno.serve(async (req) => {
                 const apiKey = await decryptAndMigrate(conn, base44);
                 const providerKey = conn.provider_type || detectProvider(conn.base_url, apiKey);
                 const prov = PROVIDERS[providerKey];
+                const candidate = detectSearchModeCandidate(providerKey, model_id, conn.base_url);
 
-                let supportsWebSearch = false;
-                let webSearchOptions = [];
+                if (candidate.search_mode === 'none') {
+                    // No search candidate — mark as none
+                    const existing = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
+                    if (existing.length > 0) {
+                        await base44.entities.ModelCatalog.update(existing[0].id, {
+                            search_mode: 'none',
+                            search_verified_at: new Date().toISOString(),
+                            search_verification_notes: 'Provider/model has no known web search capability.',
+                            supports_web_search: false,
+                            web_search_options: [],
+                        });
+                    }
+                    return Response.json({ search_mode: 'none', verified: true, notes: 'No search capability for this provider/model.' });
+                }
 
-                if (providerKey === 'perplexity') {
-                    supportsWebSearch = true;
-                    webSearchOptions = ['builtin'];
-                } else if (providerKey === 'anthropic') {
-                    try {
+                // Run a live verification call
+                let verifiedMode = 'none';
+                let toolUrls = [];
+                let notes = '';
+
+                try {
+                    if (providerKey === 'perplexity') {
+                        // Perplexity: make a real call and check for citations
                         const r = await fetch(prov.chatUrl(conn.base_url), {
                             method: 'POST',
                             headers: prov.authHeaders(apiKey),
                             body: JSON.stringify({
                                 model: model_id,
-                                messages: [{ role: 'user', content: 'What is 1+1?' }],
-                                max_tokens: 5,
+                                messages: [{ role: 'user', content: 'What is the current date today?' }],
+                                max_tokens: 100,
+                            }),
+                        });
+                        if (r.ok) {
+                            const data = await r.json();
+                            // Perplexity returns citations array
+                            const citations = data.citations || [];
+                            if (citations.length > 0) {
+                                toolUrls = citations.filter(c => typeof c === 'string' && c.startsWith('http'));
+                            }
+                            if (toolUrls.length > 0) {
+                                verifiedMode = 'provider_builtin';
+                                notes = `Verified: ${toolUrls.length} citation URLs returned.`;
+                            } else {
+                                // Perplexity always searches, citations may be absent on some queries
+                                verifiedMode = 'provider_builtin';
+                                notes = 'Verified: API responded OK (Perplexity always searches).';
+                            }
+                        } else {
+                            notes = `API returned ${r.status}`;
+                        }
+                    } else if (providerKey === 'anthropic') {
+                        const r = await fetch(prov.chatUrl(conn.base_url), {
+                            method: 'POST',
+                            headers: prov.authHeaders(apiKey),
+                            body: JSON.stringify({
+                                model: model_id,
+                                messages: [{ role: 'user', content: 'What is the current date today?' }],
+                                max_tokens: 200,
                                 tools: [{ type: 'web_search_20250305', name: 'web_search' }],
                             }),
                         });
-                        if (r.ok || r.status === 400) {
-                            const body = await r.json();
-                            if (!body.error?.message?.includes('not support')) {
-                                supportsWebSearch = true;
-                                webSearchOptions = ['web_search'];
+                        if (r.ok) {
+                            const data = await r.json();
+                            // Check for web_search_tool_result blocks with URLs
+                            for (const block of (data.content || [])) {
+                                if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+                                    for (const item of block.content) {
+                                        if (item.url) toolUrls.push(item.url);
+                                    }
+                                }
+                            }
+                            if (toolUrls.length > 0) {
+                                verifiedMode = 'provider_builtin';
+                                notes = `Verified: ${toolUrls.length} URLs from web_search tool.`;
+                            } else {
+                                notes = 'API responded but no tool URLs in response.';
+                            }
+                        } else {
+                            const body = await r.text();
+                            if (body.includes('not support')) {
+                                notes = 'Model does not support web_search tool.';
+                            } else {
+                                notes = `API returned ${r.status}: ${body.slice(0, 200)}`;
                             }
                         }
-                    } catch (_) {}
-                } else if (prov.chatFormat === 'openai') {
-                    try {
-                        const r = await safeFetch(prov.chatUrl(conn.base_url, model_id), {
+                    } else if (providerKey === 'google') {
+                        const url = `${prov.chatUrl(conn.base_url, model_id)}?key=${apiKey}`;
+                        const r = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{ role: 'user', parts: [{ text: 'What is the current date today?' }] }],
+                                generationConfig: { maxOutputTokens: 200 },
+                                tools: [{ googleSearch: {} }],
+                            }),
+                        });
+                        if (r.ok) {
+                            const data = await r.json();
+                            // Extract URLs from grounding metadata
+                            const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+                            for (const chunk of chunks) {
+                                if (chunk.web?.uri) toolUrls.push(chunk.web.uri);
+                            }
+                            if (toolUrls.length > 0) {
+                                verifiedMode = 'provider_builtin';
+                                notes = `Verified: ${toolUrls.length} grounding URLs.`;
+                            } else {
+                                notes = 'API responded but no grounding URLs in response.';
+                            }
+                        } else {
+                            notes = `API returned ${r.status}`;
+                        }
+                    } else if (providerKey === 'openai' && candidate.search_mode === 'responses_web_search') {
+                        // Use Responses API with web_search tool
+                        const responsesUrl = `${conn.base_url}/v1/responses`;
+                        const r = await fetch(responsesUrl, {
+                            method: 'POST',
+                            headers: prov.authHeaders(apiKey),
+                            body: JSON.stringify({
+                                model: model_id,
+                                input: 'What is the current date today?',
+                                tools: [{ type: 'web_search' }],
+                                max_output_tokens: 500,
+                                store: false,
+                            }),
+                        });
+                        if (r.ok) {
+                            const data = await r.json();
+                            toolUrls = extractToolUrlsFromOpenAIResponses(data);
+                            if (toolUrls.length > 0) {
+                                verifiedMode = 'responses_web_search';
+                                notes = `Verified: ${toolUrls.length} URLs from Responses API web_search.`;
+                            } else {
+                                notes = 'Responses API returned OK but no tool URLs found.';
+                            }
+                        } else {
+                            notes = `Responses API returned ${r.status}`;
+                        }
+                    } else if (providerKey === 'openai' && candidate.search_mode === 'chat_web_search_preview') {
+                        // Dedicated search model via Chat Completions + web_search_options
+                        const chatUrl = prov.chatUrl(conn.base_url, model_id);
+                        const r = await fetch(chatUrl, {
+                            method: 'POST',
+                            headers: prov.authHeaders(apiKey),
+                            body: JSON.stringify({
+                                model: model_id,
+                                messages: [{ role: 'user', content: 'What is the current date today?' }],
+                                web_search_options: {},
+                                max_tokens: 500,
+                            }),
+                        });
+                        if (r.ok) {
+                            const data = await r.json();
+                            toolUrls = extractToolUrlsFromOpenAIChat(data);
+                            if (toolUrls.length > 0) {
+                                verifiedMode = 'chat_web_search_preview';
+                                notes = `Verified: ${toolUrls.length} URLs from Chat Completions web_search.`;
+                            } else {
+                                verifiedMode = 'chat_web_search_preview';
+                                notes = 'Chat Completions responded OK for search model.';
+                            }
+                        } else {
+                            notes = `Chat Completions returned ${r.status}`;
+                        }
+                    } else if (providerKey === 'openai_compatible' && candidate.search_mode === 'provider_builtin') {
+                        // Kimi: test with builtin_function tool
+                        const chatUrl = prov.chatUrl(conn.base_url, model_id);
+                        const r = await fetch(chatUrl, {
                             method: 'POST',
                             headers: prov.authHeaders(apiKey),
                             body: JSON.stringify({
                                 model: model_id,
                                 messages: [{ role: 'user', content: 'What is 1+1?' }],
-                                max_tokens: 5,
-                                tools: [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }],
+                                max_tokens: 50,
+                                tools: [{ type: 'builtin_function', function: { name: '$web_search' } }],
                             }),
-                        }, providerKey);
+                        });
                         if (r.ok) {
-                            supportsWebSearch = true;
-                            webSearchOptions = ['web_search'];
+                            verifiedMode = 'provider_builtin';
+                            notes = 'Kimi API accepted builtin_function $web_search tool.';
+                        } else {
+                            notes = `Kimi API returned ${r.status}`;
                         }
-                    } catch (_) {}
+                    }
+                } catch (e) {
+                    notes = `Verification error: ${e.message}`;
                 }
 
+                // Update ModelCatalog
                 const existing = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 if (existing.length > 0) {
                     await base44.entities.ModelCatalog.update(existing[0].id, {
-                        supports_web_search: supportsWebSearch,
-                        web_search_options: webSearchOptions,
-                        last_checked_at: new Date().toISOString(),
+                        search_mode: verifiedMode,
+                        search_verified_at: new Date().toISOString(),
+                        search_verification_notes: notes,
+                        supports_web_search: verifiedMode !== 'none',
+                        web_search_options: verifiedMode !== 'none' ? candidate.options : [],
                     });
                 }
 
-                return Response.json({ supports_web_search: supportsWebSearch, web_search_options: webSearchOptions });
+                return Response.json({
+                    search_mode: verifiedMode,
+                    verified: verifiedMode !== 'none',
+                    tool_urls_found: toolUrls.length,
+                    notes,
+                });
             }
 
             case 'getModels': {
