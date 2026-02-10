@@ -8,8 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { 
     ArrowLeft, Download, Eye, RefreshCw, Loader2, Clock, 
-    CheckCircle, XCircle, Play, Search, FileSpreadsheet, RotateCcw
+    CheckCircle, XCircle, Play, Search, FileSpreadsheet, RotateCcw, Trash2
 } from 'lucide-react';
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -25,6 +30,7 @@ export default function History() {
     const [searchTerm, setSearchTerm] = useState('');
     const [generating, setGenerating] = useState(null);
     const [rerunning, setRerunning] = useState(null);
+    const [deleting, setDeleting] = useState(null);
 
     useEffect(() => {
         loadJobs();
@@ -32,12 +38,29 @@ export default function History() {
 
     const loadJobs = async () => {
         try {
-            const response = await base44.functions.invoke('jobProcessor', { action: 'list' });
-            setJobs(response.data.jobs || []);
+            const allJobs = await base44.entities.Job.list('-created_date', 100);
+            setJobs(allJobs);
         } catch (error) {
             toast.error('Failed to load jobs');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDelete = async (jobId) => {
+        setDeleting(jobId);
+        try {
+            await base44.functions.invoke('jobProcessor', {
+                action: 'deleteJob',
+                job_id: jobId,
+            });
+            if (selectedJobId === jobId) setSelectedJobId(null);
+            setJobs(prev => prev.filter(j => j.id !== jobId));
+            toast.success('Job deleted');
+        } catch (error) {
+            toast.error('Failed to delete job');
+        } finally {
+            setDeleting(null);
         }
     };
 
