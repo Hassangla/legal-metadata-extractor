@@ -1064,6 +1064,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             data = { error: { message: kimiErr.message || String(kimiErr) } };
                           }
                         } else {
+                          try {
                             // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
                             const resp = await fetchWithRetry(url, init);
                             data = await resp.json();
@@ -1085,6 +1086,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 inputTokens = data.usage.input_tokens || 0;
                                 outputTokens = data.usage.output_tokens || 0;
                             }
+                          } catch (fetchErr) {
+                            // Provider failure → produce diagnostic row instead of hard error
+                            data = { error: { message: fetchErr.message || String(fetchErr) } };
+                          }
                         }
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
