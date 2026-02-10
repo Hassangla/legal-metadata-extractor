@@ -1,6 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 3;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
 
