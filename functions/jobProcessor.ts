@@ -847,12 +847,30 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const content = extractTextContent(providerType, data, isResponsesApi);
                         let parsed = extractJSON(content);
 
-                        // Tag extraction status
-                        if (parsed && parsed.output) {
-                            parsed.output.Extraction_Status = 'success';
+                        // Normalize: if model returned old {output, evidence} format, migrate
+                        // to new evidence-only format by merging output Final_* fields.
+                        if (parsed && parsed.output && !parsed.evidence?.Final_Flag) {
+                            const o = parsed.output;
+                            const e = parsed.evidence || {};
+                            e.Final_Language_Doc = e.Final_Language_Doc || o.Language_Doc || '';
+                            e.Final_Instrument_Full_Name_Original_Language = e.Final_Instrument_Full_Name_Original_Language || o.Instrument_Full_Name_Original_Language || '';
+                            e.Final_Instrument_Published_Name = e.Final_Instrument_Published_Name || o.Instrument_Published_Name || '';
+                            e.Final_Instrument_URL = e.Final_Instrument_URL || o.Instrument_URL || '';
+                            e.Final_Enactment_Date = e.Final_Enactment_Date || o.Enactment_Date || '';
+                            e.Final_Date_of_Entry_in_Force = e.Final_Date_of_Entry_in_Force || o.Date_of_Entry_in_Force || '';
+                            e.Final_Repeal_Year = e.Final_Repeal_Year || o.Repeal_Year || '';
+                            e.Final_Current_Status = e.Final_Current_Status || o.Current_Status || '';
+                            e.Final_Public = e.Final_Public || o.Public || '';
+                            e.Final_Flag = e.Final_Flag || o.Flag || '';
+                            parsed = { evidence: e };
                         }
 
-                        if (!parsed) {
+                        // If model returned evidence at top level (new format), wrap it
+                        if (parsed && !parsed.evidence && parsed.Final_Flag !== undefined) {
+                            parsed = { evidence: parsed };
+                        }
+
+                        if (!parsed || !parsed.evidence) {
                             const hasToolCalls = !!(data.choices?.[0]?.message?.tool_calls?.length);
                             const rawContent = data.choices?.[0]?.message?.content;
                             const finishReason = data.choices?.[0]?.finish_reason || '';
@@ -860,7 +878,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             if (isResponsesApi) {
                                 const outputTypes = Array.isArray(data.output) ? data.output.map(i => i.type).join(', ') : 'none';
                                 diagInfo += ` [responses_api, output_types=${outputTypes}]`;
-                                // Log the actual error if the Responses API returned one
                                 if (data.error) {
                                     diagInfo += ` [api_error: ${JSON.stringify(data.error).slice(0, 200)}]`;
                                 }
@@ -881,72 +898,90 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             diagInfo += ` [finish_reason=${finishReason}]`;
 
                             parsed = {
-                                output: {
-                                    Economy_Code: economyCode,
-                                    Economy: input.Economy,
-                                    Language_Doc: '',
-                                    Instrument_Full_Name_Original_Language: '',
-                                    Instrument_Published_Name: '',
-                                    Instrument_URL: '',
-                                    Enactment_Date: '',
-                                    Date_of_Entry_in_Force: '',
-                                    Repeal_Year: '',
-                                    Current_Status: '',
-                                    Public: '',
-                                    Flag: 'No sources',
-                                    Extraction_Status: 'parse_error',
-                                },
                                 evidence: {
                                     Row_Index: row.row_index,
+                                    Economy: input.Economy,
+                                    Economy_Code: economyCode,
+                                    Legal_basis_verbatim: legalBasis,
                                     Query_1: query1, Query_2: query2, Query_3: query3,
                                     URLs_Considered: '',
                                     Selected_Source_URLs: '',
                                     Source_Tier: '',
+                                    Public_Access: '',
+                                    Raw_Official_Title_As_Source: '',
+                                    Normalized_Title_Used: '',
+                                    Language_Justification: '',
+                                    Instrument_URL_Support: '',
+                                    Enactment_Support: '',
+                                    EntryIntoForce_Support: '',
+                                    Status_Support: '',
                                     Missing_Conflict_Reason: diagInfo,
+                                    Normalization_Notes: '',
+                                    Final_Language_Doc: '',
+                                    Final_Instrument_Full_Name_Original_Language: '',
+                                    Final_Instrument_Published_Name: '',
+                                    Final_Instrument_URL: '',
+                                    Final_Enactment_Date: '',
+                                    Final_Date_of_Entry_in_Force: '',
+                                    Final_Repeal_Year: '',
+                                    Final_Current_Status: '',
+                                    Final_Public: '',
+                                    Final_Flag: 'No sources',
                                 },
                             };
                         }
 
+                        const ev = parsed.evidence;
+
                         // ── SERVER-SIDE TOOL-DEPENDENT ENFORCEMENT ──
-                        // When web search was not available (or effective search is 'none'),
-                        // blank out all web-derived fields and set Flag = "No sources".
-                        // This ensures compliance even if the LLM ignores the instruction.
-                        if (!hasRealWebSearch && parsed.output) {
-                            const toolDependentFields = [
-                                'Instrument_URL', 'Enactment_Date', 'Date_of_Entry_in_Force',
-                                'Repeal_Year', 'Current_Status', 'Public',
+                        // When web search was not available, blank out all tool-dependent
+                        // Final_* fields and set Final_Flag = "No sources".
+                        if (!hasRealWebSearch) {
+                            const toolDependentFinals = [
+                                'Final_Instrument_URL', 'Final_Enactment_Date',
+                                'Final_Date_of_Entry_in_Force', 'Final_Repeal_Year',
+                                'Final_Current_Status', 'Final_Public',
                             ];
-                            for (const f of toolDependentFields) {
-                                parsed.output[f] = '';
+                            for (const f of toolDependentFinals) {
+                                ev[f] = '';
                             }
-                            parsed.output.Flag = 'No sources';
-                            if (parsed.evidence) {
-                                const prev = parsed.evidence.Missing_Conflict_Reason || '';
-                                const note = 'Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.';
-                                parsed.evidence.Missing_Conflict_Reason = prev ? `${prev}; ${note}` : note;
-                            }
+                            ev.Final_Flag = 'No sources';
+                            const prev = ev.Missing_Conflict_Reason || '';
+                            const note = 'Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.';
+                            ev.Missing_Conflict_Reason = prev ? `${prev}; ${note}` : note;
                         }
 
-                        // Inject server-side values the LLM must not override
-                        if (parsed.output) {
-                            parsed.output.Economy_Code = economyCode;
-                            parsed.output.Economy = input.Economy;
+                        // Inject server-side canonical values
+                        ev.Row_Index = row.row_index;
+                        ev.Economy = input.Economy;
+                        ev.Economy_Code = economyCode;
+                        ev.Legal_basis_verbatim = legalBasis;
+
+                        if (!economyCode) {
+                            const prev = ev.Missing_Conflict_Reason || '';
+                            ev.Missing_Conflict_Reason = [prev, 'Economy code not found in lookup table'].filter(Boolean).join('; ');
                         }
-                        if (parsed.evidence) {
-                            parsed.evidence.Row_Index = row.row_index;
-                            parsed.evidence.Economy = input.Economy;
-                            parsed.evidence.Economy_Code = economyCode;
-                            parsed.evidence.Legal_basis_verbatim = legalBasis;
-                        }
-                        if (!economyCode && parsed.evidence) {
-                            const prev = parsed.evidence.Missing_Conflict_Reason || '';
-                            parsed.evidence.Missing_Conflict_Reason = [prev, 'Economy code not found in lookup table'].filter(Boolean).join('; ');
-                        }
+
+                        // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
+                        const outputJson = {
+                            Economy_Code: economyCode,
+                            Economy: input.Economy,
+                            Language_Doc: ev.Final_Language_Doc || '',
+                            Instrument_Full_Name_Original_Language: ev.Final_Instrument_Full_Name_Original_Language || '',
+                            Instrument_Published_Name: ev.Final_Instrument_Published_Name || '',
+                            Instrument_URL: ev.Final_Instrument_URL || '',
+                            Enactment_Date: ev.Final_Enactment_Date || '',
+                            Date_of_Entry_in_Force: ev.Final_Date_of_Entry_in_Force || '',
+                            Repeal_Year: ev.Final_Repeal_Year || '',
+                            Current_Status: ev.Final_Current_Status || '',
+                            Public: ev.Final_Public || '',
+                            Flag: ev.Final_Flag || '',
+                        };
 
                         await base44.entities.JobRow.update(row.id, {
                             status: 'done',
-                            output_json: parsed.output || {},
-                            evidence_json: parsed.evidence || {},
+                            output_json: outputJson,
+                            evidence_json: ev,
                             input_tokens: inputTokens,
                             output_tokens: outputTokens,
                         });
