@@ -323,6 +323,147 @@ function extractJSON(content) {
     return null;
 }
 
+// ── URL VERIFICATION HELPER ──────────────────────────────────
+
+async function verifyUrlLoads(url) {
+    if (!url || typeof url !== 'string') return false;
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch(url, {
+            method: 'HEAD',
+            signal: controller.signal,
+            redirect: 'follow',
+        });
+        clearTimeout(timeoutId);
+        // Accept any 2xx or 3xx as "loads"
+        return resp.status >= 200 && resp.status < 400;
+    } catch (_) {
+        return false;
+    }
+}
+
+function parseUrlList(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map(u => u.trim()).filter(Boolean);
+    return String(raw).split(/[,;\n]+/).map(u => u.trim()).filter(u => u.startsWith('http'));
+}
+
+function urlInList(url, list) {
+    if (!url || !list) return false;
+    const normalized = url.replace(/\/+$/, '').toLowerCase();
+    const items = parseUrlList(list);
+    return items.some(item => item.replace(/\/+$/, '').toLowerCase() === normalized);
+}
+
+// ── FINALIZE AND VERIFY (spec enforcement) ──────────────────
+
+async function finalizeAndVerify(ev, ctx) {
+    const notes = [];
+
+    // Helper to append to Missing_Conflict_Reason
+    const addReason = (msg) => notes.push(msg);
+
+    // ── (C) TOOL-DEPENDENT enforcement — must run first, overrides everything ──
+    if (!ctx.hasRealWebSearch) {
+        const toolDependentFinals = [
+            'Final_Instrument_URL', 'Final_Enactment_Date',
+            'Final_Date_of_Entry_in_Force', 'Final_Repeal_Year',
+            'Final_Current_Status', 'Final_Public',
+        ];
+        for (const f of toolDependentFinals) {
+            ev[f] = '';
+        }
+        ev.Final_Flag = 'No sources';
+        addReason('Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.');
+    }
+
+    // ── (D) Tier 5 restrictions ──
+    const tierRaw = String(ev.Source_Tier || ev.Tier || '').trim();
+    const tierNum = parseInt(tierRaw, 10);
+    if (tierNum === 5) {
+        const tier5Blanked = [
+            'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
+            'Final_Repeal_Year', 'Final_Current_Status',
+        ];
+        for (const f of tier5Blanked) {
+            ev[f] = '';
+        }
+        ev.Final_Flag = 'Tier 5';
+        addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
+    }
+
+    // ── (A) URL CLOSED SET enforcement ──
+    // Only run when we had real web search (otherwise URL is already blank from step C)
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
+        const inConsidered = urlInList(ev.Final_Instrument_URL, ev.URLs_Considered);
+        const inSelected = urlInList(ev.Final_Instrument_URL, ev.Selected_Source_URLs);
+
+        if (!inConsidered || !inSelected) {
+            addReason(
+                `URL closed-set violation: Final_Instrument_URL "${ev.Final_Instrument_URL}" ` +
+                `not found in ${!inConsidered ? 'URLs_Considered' : ''}${!inConsidered && !inSelected ? ' and ' : ''}${!inSelected ? 'Selected_Source_URLs' : ''}. URL blanked.`
+            );
+            ev.Final_Instrument_URL = '';
+        }
+    }
+
+    // ── (B) MINIMUM VERIFICATION — verify the URL loads ──
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
+        const loads = await verifyUrlLoads(ev.Final_Instrument_URL);
+        if (!loads) {
+            // Try alternate URLs from Selected_Source_URLs
+            const alternates = parseUrlList(ev.Selected_Source_URLs)
+                .filter(u => u.replace(/\/+$/, '').toLowerCase() !== ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase());
+
+            let found = false;
+            for (const alt of alternates) {
+                // Each alternate must also be in URLs_Considered
+                if (!urlInList(alt, ev.URLs_Considered)) continue;
+                const altLoads = await verifyUrlLoads(alt);
+                if (altLoads) {
+                    addReason(
+                        `URL verify: "${ev.Final_Instrument_URL}" failed to load. ` +
+                        `Substituted with "${alt}" which loaded successfully.`
+                    );
+                    const prevNotes = ev.Normalization_Notes || '';
+                    ev.Normalization_Notes = [prevNotes, `URL substituted: ${ev.Final_Instrument_URL} → ${alt}`].filter(Boolean).join('; ');
+                    ev.Final_Instrument_URL = alt;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                ev.Final_Public = 'No';
+                const accessNote = `URL "${ev.Final_Instrument_URL}" failed to load (verify-it-loads check).`;
+                const prevAccess = ev.Public_Access || '';
+                ev.Public_Access = [prevAccess, accessNote].filter(Boolean).join('; ');
+                addReason(accessNote + ' Final_Public set to "No".');
+            }
+        }
+    }
+
+    // ── Inject server-side canonical values ──
+    ev.Row_Index = ctx.row_index;
+    ev.Economy = ctx.economy;
+    ev.Economy_Code = ctx.economyCode;
+    ev.Legal_basis_verbatim = ctx.legalBasis;
+
+    if (!ctx.economyCode) {
+        addReason('Economy code not found in lookup table.');
+    }
+
+    // ── (E) Normalize Missing/Conflict_Reason field naming ──
+    // Merge any pre-existing reason with new notes
+    const prevReason = ev.Missing_Conflict_Reason || ev['Missing/Conflict_Reason'] || '';
+    const allReasons = [prevReason, ...notes].filter(Boolean).join('; ');
+    ev.Missing_Conflict_Reason = allReasons;
+    ev['Missing/Conflict_Reason'] = allReasons;
+
+    return ev;
+}
+
 // ── ECONOMY ALIASES ─────────────────────────────────────────
 // Common alternate names/spellings for economies
 const ECONOMY_ALIASES = {
