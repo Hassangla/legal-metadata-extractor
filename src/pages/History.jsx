@@ -132,6 +132,9 @@ export default function History() {
         job.model_id?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
+    const visibleJobs = filteredJobs.slice(0, visibleCount);
+    const hasMore = filteredJobs.length > visibleCount;
+
     const selectedJob = jobs.find(j => j.id === selectedJobId);
 
     return (
