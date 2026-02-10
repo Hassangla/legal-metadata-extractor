@@ -766,7 +766,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 if (choice.message?.content &&
                                     typeof choice.message.content === 'string' &&
                                     choice.message.content.length > 20 &&
-                                    choice.message.content.includes('"output"')) {
+                                    choice.message.content.includes('"evidence"')) {
                                     break;
                                 }
 
