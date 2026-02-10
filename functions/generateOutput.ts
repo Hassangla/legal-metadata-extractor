@@ -30,24 +30,27 @@ Deno.serve(async (req) => {
         rows.sort((a, b) => a.row_index - b.row_index);
 
         // ── OUTPUT SHEET (13 columns) ──
+        // Derive from evidence_json.Final_* when present (new format).
+        // Fall back to output_json for backward compatibility with older rows.
         const outputData = rows.map(row => {
+            const e = row.evidence_json || {};
             const o = row.output_json || {};
             const input = row.input_data || {};
+            const hasFinals = e.Final_Flag !== undefined;
             return {
                 'ID': '',
-                'Economy_Code': o.Economy_Code || '',
-                'Economy': o.Economy || input.Economy || '',
-                'Language_Doc': o.Language_Doc || '',
-                'Instrument_Full_Name_Original_Language': o.Instrument_Full_Name_Original_Language || '',
-                'Instrument_Published_Name': o.Instrument_Published_Name || '',
-                'Instrument_URL': o.Instrument_URL || '',
-                'Enactment_Date': o.Enactment_Date || '',
-                'Date of Entry in Force': o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || o['Date_of_Entry_in_Force'] || '',
-                'Repeal_Year': o.Repeal_Year || '',
-                'Current Status': o.Current_Status || o['Current Status'] || o['Current_Status'] || '',
-                'Public': o.Public || '',
-                'Flag': o.Flag || '',
-                'Extraction_Status': o.Extraction_Status || '',
+                'Economy_Code': e.Economy_Code || o.Economy_Code || '',
+                'Economy': e.Economy || o.Economy || input.Economy || '',
+                'Language_Doc': hasFinals ? (e.Final_Language_Doc || '') : (o.Language_Doc || ''),
+                'Instrument_Full_Name_Original_Language': hasFinals ? (e.Final_Instrument_Full_Name_Original_Language || '') : (o.Instrument_Full_Name_Original_Language || ''),
+                'Instrument_Published_Name': hasFinals ? (e.Final_Instrument_Published_Name || '') : (o.Instrument_Published_Name || ''),
+                'Instrument_URL': hasFinals ? (e.Final_Instrument_URL || '') : (o.Instrument_URL || ''),
+                'Enactment_Date': hasFinals ? (e.Final_Enactment_Date || '') : (o.Enactment_Date || ''),
+                'Date of Entry in Force': hasFinals ? (e.Final_Date_of_Entry_in_Force || '') : (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
+                'Repeal_Year': hasFinals ? (e.Final_Repeal_Year || '') : (o.Repeal_Year || ''),
+                'Current Status': hasFinals ? (e.Final_Current_Status || '') : (o.Current_Status || o['Current Status'] || ''),
+                'Public': hasFinals ? (e.Final_Public || '') : (o.Public || ''),
+                'Flag': hasFinals ? (e.Final_Flag || '') : (o.Flag || ''),
             };
         });
 
