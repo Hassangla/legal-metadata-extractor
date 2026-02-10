@@ -1031,7 +1031,21 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        const content = extractTextContent(providerType, data, isResponsesApi);
+                        let content = extractTextContent(providerType, data, isResponsesApi);
+                        
+                        // Tool failure detection: if Responses API returned text indicating
+                        // web search was unavailable, treat as no-sources (fail-closed)
+                        if (isResponsesApi && hasRealWebSearch && content) {
+                            const lower = content.toLowerCase();
+                            if (lower.includes('no web search tool') ||
+                                lower.includes('web search is not available') ||
+                                lower.includes('i don\'t have access to web search') ||
+                                lower.includes('cannot perform web search')) {
+                                // Override: treat as no-search run
+                                hasRealWebSearch = false;
+                            }
+                        }
+
                         let parsed = extractJSON(content);
 
                         // Normalize: if model returned old {output, evidence} format, migrate
