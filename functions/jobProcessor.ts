@@ -550,6 +550,14 @@ Deno.serve(async (req) => {
                             ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
+                        // Determine if we have REAL server-side web search
+                        const hasRealWebSearch = job.web_search_choice
+                            && job.web_search_choice !== 'none'
+                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
+
+                        // If user selected a non-server-side search tool, fall back to no search
+                        const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
+
                         // When web search is not available, override the spec's TOOL-DEPENDENT rule
                         // which would force all fields blank. Instead, instruct the LLM to use
                         // its training knowledge.
@@ -568,14 +576,6 @@ CRITICAL OUTPUT RULES:
 - If you cannot find information for a field, leave it as an empty string "".
 
 ${specText}`;
-
-                        // Determine if we have REAL server-side web search
-                        const hasRealWebSearch = job.web_search_choice
-                            && job.web_search_choice !== 'none'
-                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
-
-                        // If user selected a non-server-side search tool, fall back to no search
-                        const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
                         // Build user prompt — conditional on whether real web search is available
                         let searchInstructions;
