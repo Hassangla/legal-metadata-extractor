@@ -1134,18 +1134,24 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
                         
-                        // Tool failure detection: if Responses API returned text indicating
-                        // web search was unavailable, treat as no-sources (fail-closed)
-                        if (isResponsesApi && hasRealWebSearch && content) {
-                            const lower = content.toLowerCase();
-                            if (lower.includes('no web search tool') ||
-                                lower.includes('web search is not available') ||
-                                lower.includes('i don\'t have access to web search') ||
-                                lower.includes('cannot perform web search')) {
-                                // Override: treat as no-search run
-                                hasRealWebSearch = false;
-                            }
+                        // ── TOOL URL EXTRACTION (provable provenance) ──
+                        let toolUrlSet = [];
+                        if (hasRealWebSearch && !isKimiSearch) {
+                            toolUrlSet = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
                         }
+                        // For Kimi, tool URLs are not extractable from the echo protocol
+                        // so we rely on the model's self-reported URLs
+
+                        // Tool failure detection: if the response indicates search was unavailable
+                        if (hasRealWebSearch && isNoSearchToolError(providerType, data, content, isResponsesApi)) {
+                            hasRealWebSearch = false;
+                            toolUrlSet = [];
+                        }
+                        
+                        // If we expected search but got zero tool URLs (non-Kimi, non-Perplexity),
+                        // flag it but don't force no-search — the model may have searched but
+                        // annotations weren't available in the response format
+
 
                         let parsed = extractJSON(content);
 
