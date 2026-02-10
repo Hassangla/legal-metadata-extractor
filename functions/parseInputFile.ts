@@ -200,7 +200,25 @@ Deno.serve(async (req) => {
             }, { status: 400 });
         }
 
-        // ── Step 6: Pass through ALL columns as-is ──────────────
+        // ── Step 6: Enforce required columns ────────────────────
+        const REQUIRED_COLUMNS = ['Owner', 'Economy', 'Legal basis', 'Question', 'Topic'];
+
+        const detectedNormalized = headers.map(h => h.trim().toLowerCase().replace(/[_\s]+/g, ' '));
+        const missing = REQUIRED_COLUMNS.filter(rc => {
+            const norm = rc.toLowerCase().replace(/[_\s]+/g, ' ');
+            return !detectedNormalized.some(d => d === norm || d === norm.replace(/ /g, '_'));
+        });
+
+        if (missing.length > 0) {
+            return Response.json({
+                error: `Missing required columns: ${missing.join(', ')}. Detected columns in sheet "${bestSheetName}": ${headers.map(h => h.trim()).filter(Boolean).join(', ')}`,
+                missing_columns: missing,
+                detected_columns: headers.map(h => h.trim()).filter(Boolean),
+                selected_sheet: bestSheetName,
+            }, { status: 400 });
+        }
+
+        // ── Step 7: Pass through ALL columns as-is ──────────────
         const rows = data.map(row => {
             const cleaned = {};
             for (const [key, value] of Object.entries(row)) {
