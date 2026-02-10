@@ -187,7 +187,7 @@ export default function History() {
                             </Card>
                         ) : (
                             <div className="space-y-2">
-                                {filteredJobs.map((job) => {
+                                {visibleJobs.map((job) => {
                                     const status = statusConfig[job.status] || statusConfig.queued;
                                     const StatusIcon = status.icon;
                                     const isSelected = selectedJobId === job.id;
