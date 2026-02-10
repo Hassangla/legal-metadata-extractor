@@ -13,11 +13,11 @@ const PROVIDERS = {
         chatFormat: 'openai',
         cloudflareRisk: true,
         webSearchTool: 'web_search_preview',
-        note: 'May be blocked by Cloudflare when called from cloud servers. Consider using OpenRouter instead.',
+        note: 'May be blocked by Cloudflare when called from cloud servers.',
     },
     openrouter: {
-        label: 'OpenRouter',
-        icon: '🔀',
+        label: 'Legacy (Removed)',
+        icon: '🚫',
         modelsUrl:  (base) => `${base}/v1/models`,
         chatUrl:    (base) => `${base}/v1/chat/completions`,
         authHeaders:(key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
@@ -25,7 +25,8 @@ const PROVIDERS = {
         chatFormat: 'openai',
         cloudflareRisk: false,
         webSearchTool: null,
-        note: 'Proxies to OpenAI, Anthropic, Google, and many other models. Recommended for cloud use.',
+        note: 'OpenRouter has been removed. Please use OpenAI direct or another supported provider.',
+        removed: true,
     },
     anthropic: {
         label: 'Anthropic',
@@ -267,41 +268,28 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
-    // OpenAI direct: GPT-4o/4.5, o-series, chatgpt-4o support web search
-    // NOTE: GPT-4.1 does NOT support web search — it ignores the tool and returns "no tool available"
+    // OpenAI direct: strict allowlist for web search models
+    // Only models verified to work with Responses API web_search tool
+    const OPENAI_WEBSEARCH_ALLOWLIST = new Set([
+        'gpt-4o', 'gpt-4o-mini', 'gpt-4o-search-preview',
+        'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+    ]);
     if (providerKey === 'openai') {
-        if (id.includes('gpt-4.1')) {
-            return { supports: false, options: [] };
-        }
-        if (id.includes('gpt-4o') || id.includes('gpt-4.5') ||
-            id.includes('gpt-4-turbo') ||
-            id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4') ||
-            id.startsWith('chatgpt-4o')) {
+        // Check exact match first, then prefix match
+        if (OPENAI_WEBSEARCH_ALLOWLIST.has(id)) {
             return { supports: true, options: ['web_search_preview'] };
+        }
+        for (const allowed of OPENAI_WEBSEARCH_ALLOWLIST) {
+            if (id.startsWith(allowed + '-')) {
+                return { supports: true, options: ['web_search_preview'] };
+            }
         }
         return { supports: false, options: [] };
     }
 
-    // OpenRouter: detect by model path prefix
+    // OpenRouter: removed — always return no web search
     if (providerKey === 'openrouter') {
-        if (id.includes('anthropic/claude')) {
-            return { supports: true, options: ['web_search'] };
-        }
-        if (id.includes('openai/gpt-4.1')) {
-            return { supports: false, options: [] };
-        }
-        if (id.includes('openai/gpt-4o') ||
-            id.includes('openai/gpt-4.5') || id.includes('openai/chatgpt-4o') ||
-            id.match(/openai\/o[134]/)) {
-            return { supports: true, options: ['web_search_preview'] };
-        }
-        if (id.includes('google/gemini')) {
-            return { supports: true, options: ['google_search'] };
-        }
-        if (id.includes('perplexity/')) {
-            return { supports: true, options: ['builtin'] };
-        }
-        return { supports: null, options: [] };
+        return { supports: false, options: [] };
     }
 
     // ── OpenAI-Compatible: identify providers with real server-side search ──
@@ -387,34 +375,7 @@ function lookupStaticPricing(modelId) {
     return null;
 }
 
-async function fetchOpenRouterPricing() {
-    try {
-        const resp = await fetch('https://openrouter.ai/api/v1/models', {
-            headers: { 'Content-Type': 'application/json' },
-        });
-        if (!resp.ok) return {};
-        const data = await resp.json();
-        const pricingMap = {};
-        for (const model of (data.data || [])) {
-            if (model.pricing) {
-                const promptPerToken = parseFloat(model.pricing.prompt) || 0;
-                const completionPerToken = parseFloat(model.pricing.completion) || 0;
-                pricingMap[model.id] = {
-                    input: promptPerToken * 1_000_000,
-                    output: completionPerToken * 1_000_000,
-                };
-                const shortName = model.id.split('/').pop();
-                if (shortName && !pricingMap[shortName]) {
-                    pricingMap[shortName] = pricingMap[model.id];
-                }
-            }
-        }
-        return pricingMap;
-    } catch (e) {
-        console.error('Failed to fetch OpenRouter pricing:', e.message);
-        return {};
-    }
-}
+// OpenRouter pricing fetch removed — using static pricing table only
 
 // ── MAIN HANDLER ────────────────────────────────────────────
 
@@ -452,6 +413,10 @@ Deno.serve(async (req) => {
 
                 const cleanUrl = base_url.replace(/\/+$/, '');
                 const providerKey = detectProvider(cleanUrl, api_key);
+                
+                if (providerKey === 'openrouter') {
+                    return Response.json({ success: false, error: 'OpenRouter is no longer supported. Please use OpenAI direct or another provider.', provider_type: 'openrouter', label: 'Legacy (Removed)' });
+                }
                 const prov = PROVIDERS[providerKey];
 
                 if (providerKey === 'perplexity') {
@@ -518,6 +483,10 @@ Deno.serve(async (req) => {
 
                 const cleanUrl = base_url.replace(/\/+$/, '');
                 const providerKey = detectProvider(cleanUrl, api_key);
+                
+                if (providerKey === 'openrouter') {
+                    return Response.json({ error: 'OpenRouter is no longer supported. Please use OpenAI direct or another provider.' }, { status: 400 });
+                }
                 const encrypted = await encryptString(api_key);
 
                 const connection = await base44.entities.APIConnection.create({
@@ -780,8 +749,6 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'Admin only' }, { status: 403 });
                 }
                 const { connection_id: pricingConnId } = params;
-                let livePricing = {};
-                try { livePricing = await fetchOpenRouterPricing(); } catch (_) {}
 
                 let pricingModels;
                 if (pricingConnId) {
@@ -793,29 +760,18 @@ Deno.serve(async (req) => {
                 let pricingUpdated = 0;
                 for (const m of pricingModels) {
                     const mid = (m.model_id || '').toLowerCase();
-                    let price = livePricing[mid];
-                    if (!price) {
-                        for (const [key, p] of Object.entries(livePricing)) {
-                            if (key.endsWith('/' + mid) || mid.includes(key.split('/').pop())) {
-                                price = p; break;
-                            }
-                        }
-                    }
-                    const source = price ? 'openrouter' : null;
-                    if (!price) {
-                        price = lookupStaticPricing(mid);
-                        if (price && m.pricing_source === 'manual') continue;
-                    }
+                    if (m.pricing_source === 'manual') continue;
+                    const price = lookupStaticPricing(mid);
                     if (price && (m.input_price_per_million !== price.input || m.output_price_per_million !== price.output)) {
                         await base44.entities.ModelCatalog.update(m.id, {
                             input_price_per_million: price.input,
                             output_price_per_million: price.output,
-                            pricing_source: source || (m.pricing_source === 'manual' ? 'manual' : 'static'),
+                            pricing_source: 'static',
                         });
                         pricingUpdated++;
                     }
                 }
-                return Response.json({ success: true, updated: pricingUpdated, total: pricingModels.length, live_pricing_models: Object.keys(livePricing).length });
+                return Response.json({ success: true, updated: pricingUpdated, total: pricingModels.length });
             }
 
             case 'updateModelPrice': {
