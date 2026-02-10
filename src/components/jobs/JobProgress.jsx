@@ -278,12 +278,6 @@ export default function JobProgress({ jobId, onComplete }) {
                     <p><span className="font-medium">Connection:</span> {job.connection_name}</p>
                     <p><span className="font-medium">Model:</span> {job.model_name}</p>
                     <p><span className="font-medium">Input:</span> {job.input_file_name}</p>
-                    <p>
-                        <span className="font-medium">Web Search:</span>{' '}
-                        {job.web_search_choice && job.web_search_choice !== 'none'
-                            ? <span className="text-green-600">{job.web_search_choice} (requested)</span>
-                            : <span className="text-slate-400">Disabled</span>}
-                    </p>
                 </div>
 
                 {/* Error message */}

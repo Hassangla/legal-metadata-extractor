@@ -353,91 +353,6 @@ function extractJSON(content) {
     return null;
 }
 
-// ── TOOL URL EXTRACTION FROM PROVIDER RESPONSES ─────────────
-
-function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
-    const urls = [];
-
-    if (isResponsesApi) {
-        // OpenAI Responses API: URLs in annotations of message content
-        if (Array.isArray(data?.output)) {
-            for (const item of data.output) {
-                if (item.type === 'message' && Array.isArray(item.content)) {
-                    for (const part of item.content) {
-                        if (part.annotations && Array.isArray(part.annotations)) {
-                            for (const ann of part.annotations) {
-                                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return [...new Set(urls)];
-    }
-
-    if (providerType === 'anthropic') {
-        for (const block of (data?.content || [])) {
-            if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
-                for (const item of block.content) {
-                    if (item.url) urls.push(item.url);
-                }
-            }
-        }
-        return [...new Set(urls)];
-    }
-
-    if (providerType === 'google') {
-        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-        for (const chunk of chunks) {
-            if (chunk.web?.uri) urls.push(chunk.web.uri);
-        }
-        return [...new Set(urls)];
-    }
-
-    if (providerType === 'perplexity') {
-        const citations = data?.citations || [];
-        for (const c of citations) {
-            if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
-        }
-        return [...new Set(urls)];
-    }
-
-    // OpenAI Chat Completions (search models)
-    const msg = data?.choices?.[0]?.message;
-    if (msg) {
-        if (Array.isArray(msg.content)) {
-            for (const part of msg.content) {
-                if (part.annotations && Array.isArray(part.annotations)) {
-                    for (const ann of part.annotations) {
-                        if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
-                    }
-                }
-            }
-        }
-        if (Array.isArray(msg.annotations)) {
-            for (const ann of msg.annotations) {
-                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
-            }
-        }
-    }
-    return [...new Set(urls)];
-}
-
-function isNoSearchToolError(providerType, data, content, isResponsesApi) {
-    if (!content && !data) return false;
-    const text = (content || '').toLowerCase();
-    if (text.includes('no web search tool') ||
-        text.includes('web search is not available') ||
-        text.includes('i don\'t have access to web search') ||
-        text.includes('cannot perform web search') ||
-        text.includes('web search tool not available')) {
-        return true;
-    }
-    if (isResponsesApi && data?.status === 'failed') return true;
-    return false;
-}
-
 // ── URL VERIFICATION HELPER ──────────────────────────────────
 
 async function verifyUrlLoads(url) {
@@ -508,20 +423,7 @@ async function finalizeAndVerify(ev, ctx) {
         addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
     }
 
-    // ── (A1) TOOL URL PROVENANCE enforcement (primary trusted source) ──
-    // If we have tool URLs from provider artifacts, the Final URL must be in that set
-    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL && ctx.toolUrlSet && ctx.toolUrlSet.length > 0) {
-        const inToolSet = urlInList(ev.Final_Instrument_URL, ctx.toolUrlSet.join(','));
-        if (!inToolSet) {
-            addReason(
-                `URL provenance violation: Final_Instrument_URL "${ev.Final_Instrument_URL}" ` +
-                `not found in tool_url_set (${ctx.toolUrlSet.length} proven URLs from search tool). URL blanked.`
-            );
-            ev.Final_Instrument_URL = '';
-        }
-    }
-
-    // ── (A2) URL CLOSED SET enforcement (secondary check) ──
+    // ── (A) URL CLOSED SET enforcement ──
     // Only run when we had real web search (otherwise URL is already blank from step C)
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const inConsidered = urlInList(ev.Final_Instrument_URL, ev.URLs_Considered);
@@ -837,21 +739,17 @@ Deno.serve(async (req) => {
                     console.error('Failed to load economy codes (non-fatal):', ecoErr.message);
                 }
 
-                // Look up stored model pricing and search_mode from ModelCatalog
+                // Look up stored model pricing from ModelCatalog
                 let modelInputPrice = 0;
                 let modelOutputPrice = 0;
-                let catalogSearchMode = 'none';
                 try {
                     const catalogEntries = await base44.entities.ModelCatalog.filter({
                         connection_id: job.connection_id,
                         model_id: job.model_id,
                     });
-                    if (catalogEntries.length > 0) {
-                        if (catalogEntries[0].input_price_per_million > 0) {
-                            modelInputPrice = catalogEntries[0].input_price_per_million;
-                            modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
-                        }
-                        catalogSearchMode = catalogEntries[0].search_mode || 'none';
+                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
+                        modelInputPrice = catalogEntries[0].input_price_per_million;
+                        modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
                     }
                 } catch (_) {}
 
@@ -897,21 +795,19 @@ Deno.serve(async (req) => {
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
                         // Determine if we have REAL server-side web search.
-                        // Primary source of truth: catalogSearchMode from verified ModelCatalog.
-                        const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
-                        let hasRealWebSearch = requestedWebSearch && catalogSearchMode !== 'none';
+                        // For OpenAI, additionally gate on the web search model allowlist.
+                        let hasRealWebSearch = job.web_search_choice
+                            && job.web_search_choice !== 'none'
+                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
 
-                        // Fallback for unverified models: use legacy heuristic
-                        if (requestedWebSearch && catalogSearchMode === 'none') {
-                            const legacyCheck = job.web_search_choice !== 'none'
-                                && SERVER_SIDE_SEARCH.has(job.web_search_choice);
-                            if (legacyCheck && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
-                                hasRealWebSearch = isOpenAIWebSearchModel(job.model_id);
-                            } else {
-                                hasRealWebSearch = legacyCheck;
+                        // OpenAI-specific: only allowlisted models can actually use web search
+                        if (hasRealWebSearch && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
+                            if (!isOpenAIWebSearchModel(job.model_id)) {
+                                hasRealWebSearch = false;
                             }
                         }
 
+                        // If user selected a non-server-side search tool, fall back to no search
                         const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
@@ -1147,24 +1043,18 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
                         
-                        // ── TOOL URL EXTRACTION (provable provenance) ──
-                        let toolUrlSet = [];
-                        if (hasRealWebSearch && !isKimiSearch) {
-                            toolUrlSet = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
+                        // Tool failure detection: if Responses API returned text indicating
+                        // web search was unavailable, treat as no-sources (fail-closed)
+                        if (isResponsesApi && hasRealWebSearch && content) {
+                            const lower = content.toLowerCase();
+                            if (lower.includes('no web search tool') ||
+                                lower.includes('web search is not available') ||
+                                lower.includes('i don\'t have access to web search') ||
+                                lower.includes('cannot perform web search')) {
+                                // Override: treat as no-search run
+                                hasRealWebSearch = false;
+                            }
                         }
-                        // For Kimi, tool URLs are not extractable from the echo protocol
-                        // so we rely on the model's self-reported URLs
-
-                        // Tool failure detection: if the response indicates search was unavailable
-                        if (hasRealWebSearch && isNoSearchToolError(providerType, data, content, isResponsesApi)) {
-                            hasRealWebSearch = false;
-                            toolUrlSet = [];
-                        }
-                        
-                        // If we expected search but got zero tool URLs (non-Kimi, non-Perplexity),
-                        // flag it but don't force no-search — the model may have searched but
-                        // annotations weren't available in the response format
-
 
                         let parsed = extractJSON(content);
 
@@ -1259,7 +1149,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             economy: input.Economy,
                             economyCode,
                             legalBasis,
-                            toolUrlSet,
                         });
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
@@ -1277,11 +1166,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             Public: ev.Final_Public || '',
                             Flag: ev.Final_Flag || '',
                         };
-
-                        // Store tool_url_set in evidence for provenance auditing
-                        if (toolUrlSet.length > 0) {
-                            ev.tool_url_set = toolUrlSet;
-                        }
 
                         await base44.entities.JobRow.update(row.id, {
                             status: 'done',
