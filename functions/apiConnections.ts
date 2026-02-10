@@ -299,9 +299,9 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
     // ── OpenAI-Compatible: identify known providers by base URL ──
     if (providerKey === 'openai_compatible') {
 
-        // Moonshot / Kimi — supports function calling with web search
+        // Moonshot / Kimi — uses builtin_function $web_search
         if (url.includes('moonshot') || url.includes('kimi')) {
-            return { supports: true, options: ['web_search'] };
+            return { supports: true, options: ['kimi_web_search'] };
         }
 
         // DeepSeek — deepseek-chat and deepseek-v* support tool use

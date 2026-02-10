@@ -97,8 +97,11 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         if (webSearchChoice === 'web_search_preview') {
             // OpenAI native web search — must use the built-in tool type
             body.tools = [{ type: 'web_search_preview' }];
+        } else if (webSearchChoice === 'kimi_web_search') {
+            // Moonshot / Kimi — must use builtin_function with $web_search
+            body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
         } else {
-            // Kimi, DeepSeek, other openai_compatible providers
+            // DeepSeek, xAI, other openai_compatible providers — generic function tool
             body.tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web for current legal information', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } } }];
         }
     } else {
@@ -128,7 +131,38 @@ function extractTextContent(providerType, data) {
             ?.map((p) => p.text || '')
             .join('\n') || '';
     }
-    return data.choices?.[0]?.message?.content || '';
+
+    // OpenAI / OpenAI-compatible format
+    const msg = data.choices?.[0]?.message;
+    if (!msg) return '';
+
+    // Standard case: content is a string
+    if (typeof msg.content === 'string' && msg.content.length > 0) {
+        return msg.content;
+    }
+
+    // Some providers return content as an array of objects (e.g., web search annotations)
+    if (Array.isArray(msg.content)) {
+        const textParts = msg.content
+            .filter((part) => part.type === 'text' || part.type === 'output_text')
+            .map((part) => part.text || '');
+        if (textParts.length > 0) return textParts.join('\n');
+    }
+
+    // Fallback: if content is null but tool_calls exist (e.g., wrong tool format),
+    // try to extract any useful text from tool call arguments
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (let i = msg.tool_calls.length - 1; i >= 0; i--) {
+            const tc = msg.tool_calls[i];
+            const args = tc.function?.arguments || tc.arguments || '';
+            if (args.includes('"output"') || args.includes('"evidence"')) {
+                return args;
+            }
+        }
+    }
+
+    if (msg.refusal) return '';
+    return '';
 }
 
 // ── RETRY WITH BACKOFF ──────────────────────────────────────
@@ -453,6 +487,19 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                         }
 
                         if (!parsed) {
+                            const hasToolCalls = !!(data.choices?.[0]?.message?.tool_calls?.length);
+                            const rawContent = data.choices?.[0]?.message?.content;
+                            const finishReason = data.choices?.[0]?.finish_reason || '';
+                            let diagInfo = 'Failed to parse LLM response.';
+                            if (hasToolCalls && !rawContent) {
+                                diagInfo += ' [model returned tool_calls with null content — likely wrong web search tool format for this provider]';
+                            } else if (!content) {
+                                diagInfo += ' [empty content]';
+                            } else {
+                                diagInfo += ' Raw: ' + (content || '').slice(0, 400);
+                            }
+                            diagInfo += ` [finish_reason=${finishReason}]`;
+
                             parsed = {
                                 output: {
                                     Economy_Code: economyCode,
@@ -474,7 +521,7 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                     URLs_Considered: '',
                                     Selected_Source_URLs: '',
                                     Source_Tier: '',
-                                    Missing_Conflict_Reason: 'Failed to parse LLM response: ' + (content || '').slice(0, 500),
+                                    Missing_Conflict_Reason: diagInfo,
                                 },
                             };
                         }
