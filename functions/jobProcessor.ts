@@ -755,6 +755,10 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                 if (!choice) break;
                                 if (choice.finish_reason === 'stop') break;
 
+                                // finish_reason=length means output was truncated.
+                                // Break and let the follow-up handler deal with it.
+                                if (choice.finish_reason === 'length') break;
+
                                 // If model returned content that contains JSON, use it
                                 if (choice.message?.content &&
                                     typeof choice.message.content === 'string' &&
