@@ -755,17 +755,16 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                 if (!choice) break;
                                 if (choice.finish_reason === 'stop') break;
 
-                                // If model returned content alongside tool_calls, use it
+                                // If model returned content that contains JSON, use it
                                 if (choice.message?.content &&
                                     typeof choice.message.content === 'string' &&
-                                    choice.message.content.length > 20) {
+                                    choice.message.content.length > 20 &&
+                                    choice.message.content.includes('"output"')) {
                                     break;
                                 }
 
                                 // Kimi echo protocol: append assistant tool_calls, then
                                 // echo each tool's arguments back as the tool result.
-                                // Moonshot's server recognizes $web_search and performs
-                                // the actual search, returning results on the next call.
                                 if (choice.finish_reason === 'tool_calls' && choice.message?.tool_calls?.length > 0) {
                                     bodyObj.messages.push({
                                         role: 'assistant',
@@ -784,6 +783,35 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                 }
 
                                 break;
+                            }
+
+                            // After the tool loop, check if the final response is narrative
+                            // (not JSON). If so, do a follow-up call asking for JSON output.
+                            const finalContent = extractTextContent(providerType, data, false);
+                            const finalParsed = extractJSON(finalContent);
+                            if (!finalParsed && finalContent && finalContent.length > 50) {
+                                // Model narrated instead of returning JSON — do a follow-up
+                                bodyObj.messages.push({
+                                    role: 'assistant',
+                                    content: finalContent,
+                                });
+                                bodyObj.messages.push({
+                                    role: 'user',
+                                    content: 'You provided a narrative description instead of JSON. Now convert ALL of your findings into the exact JSON structure I requested. Return ONLY the JSON object starting with { and ending with }. No explanation, no markdown, no code fences.',
+                                });
+                                // Remove tools to prevent another search loop
+                                delete bodyObj.tools;
+
+                                const followupResp = await fetchWithRetry(url, {
+                                    method: 'POST',
+                                    headers: init.headers,
+                                    body: JSON.stringify(bodyObj),
+                                });
+                                data = await followupResp.json();
+                                if (data.usage) {
+                                    inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                                    outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0;
+                                }
                             }
                         } else {
                             // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
