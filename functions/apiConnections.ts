@@ -287,7 +287,10 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         if (id.includes('anthropic/claude')) {
             return { supports: true, options: ['web_search'] };
         }
-        if (id.includes('openai/gpt-4o') || id.includes('openai/gpt-4.1') ||
+        if (id.includes('openai/gpt-4.1')) {
+            return { supports: false, options: [] };
+        }
+        if (id.includes('openai/gpt-4o') ||
             id.includes('openai/gpt-4.5') || id.includes('openai/chatgpt-4o') ||
             id.match(/openai\/o[134]/)) {
             return { supports: true, options: ['web_search_preview'] };
