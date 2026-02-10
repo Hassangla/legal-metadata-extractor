@@ -29,6 +29,30 @@ const SERVER_SIDE_SEARCH = new Set([
     'kimi_web_search',     // Kimi/Moonshot — server-side builtin_function (echo-loop protocol)
 ]);
 
+// ── KIMI EMBEDDED TOOL-CALL PARSER ─────────────────────────
+// Kimi thinking models sometimes embed tool calls as special tokens
+// inside the assistant content instead of returning structured tool_calls.
+function parseKimiToolCallsFromText(text) {
+    if (!text || !text.includes('<|tool_calls_section_begin|>')) return [];
+    const sectionMatch = text.match(/<\|tool_calls_section_begin\|>([\s\S]*?)<\|tool_calls_section_end\|>/);
+    if (!sectionMatch) return [];
+    const section = sectionMatch[1];
+    const toolCalls = [];
+    const re = /<\|tool_call_begin\|>\s*functions\.([^:]+):(\S+)\s*<\|tool_call_argument_begin\|>([\s\S]*?)<\|tool_call_end\|>/g;
+    let m;
+    while ((m = re.exec(section)) !== null) {
+        const functionName = m[1].trim();
+        const functionId = m[2].trim();
+        const functionArgs = m[3].trim();
+        toolCalls.push({
+            id: functionId,
+            type: 'function',
+            function: { name: functionName, arguments: functionArgs },
+        });
+    }
+    return toolCalls;
+}
+
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
 // Only these OpenAI models are verified to work with the Responses API.
 // All other models use standard Chat Completions.
