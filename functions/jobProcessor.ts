@@ -686,24 +686,14 @@ INPUT DATA:
 
 ${searchInstructions}
 
-Return a JSON object with EXACTLY this structure (no extra keys, no missing keys). Return ONLY valid JSON — no markdown fences, no explanation text, no code blocks:
+Return a single JSON object with EXACTLY this structure (no extra keys, no missing keys). Return ONLY valid JSON — no markdown fences, no explanation text, no code blocks.
+The object has ONE top-level key "evidence" containing all evidence fields AND all Final_* decision fields:
 {
-  "output": {
-    "Economy_Code": "${economyCode}",
-    "Economy": "${input.Economy}",
-    "Language_Doc": "",
-    "Instrument_Full_Name_Original_Language": "",
-    "Instrument_Published_Name": "",
-    "Instrument_URL": "",
-    "Enactment_Date": "",
-    "Date_of_Entry_in_Force": "",
-    "Repeal_Year": "",
-    "Current_Status": "",
-    "Public": "",
-    "Flag": ""
-  },
   "evidence": {
     "Row_Index": ${row.row_index},
+    "Economy": "${input.Economy}",
+    "Economy_Code": "${economyCode}",
+    "Legal_basis_verbatim": ${JSON.stringify(legalBasis)},
     "Query_1": ${JSON.stringify(query1)},
     "Query_2": ${JSON.stringify(query2)},
     "Query_3": ${JSON.stringify(query3)},
@@ -719,7 +709,17 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
     "EntryIntoForce_Support": "",
     "Status_Support": "",
     "Missing_Conflict_Reason": "",
-    "Normalization_Notes": ""
+    "Normalization_Notes": "",
+    "Final_Language_Doc": "",
+    "Final_Instrument_Full_Name_Original_Language": "",
+    "Final_Instrument_Published_Name": "",
+    "Final_Instrument_URL": "",
+    "Final_Enactment_Date": "",
+    "Final_Date_of_Entry_in_Force": "",
+    "Final_Repeal_Year": "",
+    "Final_Current_Status": "",
+    "Final_Public": "",
+    "Final_Flag": ""
   }
 }`;
 
