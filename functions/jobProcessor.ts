@@ -24,9 +24,10 @@ const CHAT_CONFIGS = {
 // client-side search execution, which we do not support.
 const SERVER_SIDE_SEARCH = new Set([
     'web_search',          // Anthropic — server-side tool
-    'web_search_preview',  // OpenAI — server-side tool
+    'web_search_preview',  // OpenAI — server-side tool (via Responses API)
     'google_search',       // Google Gemini — server-side tool
     'builtin',             // Perplexity — all models search automatically
+    'kimi_web_search',     // Kimi/Moonshot — server-side builtin_function (echo-loop protocol)
 ]);
 
 // ── ENCRYPTION ──────────────────────────────────────────────
@@ -618,27 +619,83 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                             effectiveWebSearch, conn.base_url, apiKey
                         );
 
-                        // All requests are now single-call.
-                        // Server-side search providers (Anthropic, OpenAI, Google, Perplexity)
-                        // handle search internally and return results in one response.
                         let data;
                         let inputTokens = 0;
                         let outputTokens = 0;
 
-                        const resp = await fetchWithRetry(url, init);
-                        data = await resp.json();
+                        // Kimi uses an echo-based tool-call loop: the client echoes
+                        // $web_search arguments back, and Moonshot's server performs
+                        // the actual search on the next round-trip.
+                        const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
-                        if (data.usage) {
-                            inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
-                            outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
-                        } else if (data.usageMetadata) {
-                            inputTokens = data.usageMetadata.promptTokenCount || 0;
-                            outputTokens = data.usageMetadata.candidatesTokenCount || 0;
-                        }
-                        // Responses API may report tokens differently
-                        if (isResponsesApi && inputTokens === 0 && data.usage) {
-                            inputTokens = data.usage.input_tokens || 0;
-                            outputTokens = data.usage.output_tokens || 0;
+                        if (isKimiSearch) {
+                            const bodyObj = JSON.parse(init.body);
+                            const MAX_TOOL_LOOPS = 10;
+
+                            for (let loop = 0; loop <= MAX_TOOL_LOOPS; loop++) {
+                                const loopResp = await fetchWithRetry(url, {
+                                    method: 'POST',
+                                    headers: init.headers,
+                                    body: JSON.stringify(bodyObj),
+                                });
+                                data = await loopResp.json();
+
+                                if (data.usage) {
+                                    inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                                    outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0;
+                                }
+
+                                const choice = data.choices?.[0];
+                                if (!choice) break;
+                                if (choice.finish_reason === 'stop') break;
+
+                                // If model returned content alongside tool_calls, use it
+                                if (choice.message?.content &&
+                                    typeof choice.message.content === 'string' &&
+                                    choice.message.content.length > 20) {
+                                    break;
+                                }
+
+                                // Kimi echo protocol: append assistant tool_calls, then
+                                // echo each tool's arguments back as the tool result.
+                                // Moonshot's server recognizes $web_search and performs
+                                // the actual search, returning results on the next call.
+                                if (choice.finish_reason === 'tool_calls' && choice.message?.tool_calls?.length > 0) {
+                                    bodyObj.messages.push({
+                                        role: 'assistant',
+                                        content: choice.message.content || null,
+                                        tool_calls: choice.message.tool_calls,
+                                    });
+
+                                    for (const tc of choice.message.tool_calls) {
+                                        bodyObj.messages.push({
+                                            role: 'tool',
+                                            tool_call_id: tc.id,
+                                            content: tc.function?.arguments || JSON.stringify({ status: 'ok' }),
+                                        });
+                                    }
+                                    continue;
+                                }
+
+                                break;
+                            }
+                        } else {
+                            // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
+                            const resp = await fetchWithRetry(url, init);
+                            data = await resp.json();
+
+                            if (data.usage) {
+                                inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                                outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
+                            } else if (data.usageMetadata) {
+                                inputTokens = data.usageMetadata.promptTokenCount || 0;
+                                outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+                            }
+                            // Responses API may report tokens differently
+                            if (isResponsesApi && inputTokens === 0 && data.usage) {
+                                inputTokens = data.usage.input_tokens || 0;
+                                outputTokens = data.usage.output_tokens || 0;
+                            }
                         }
 
                         const content = extractTextContent(providerType, data, isResponsesApi);
