@@ -91,9 +91,9 @@ export default function JobProgress({ jobId, onComplete }) {
                 (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
                 // Adaptive delay: increase delay as job progresses to reduce rate limiting risk
                 const batchNumber = (result.jobData.progress_json?.current_batch || 1);
-                const baseDelay = 1000; // 1 second base
-                const maxDelay = 5000;  // 5 seconds max
-                const delay = Math.min(baseDelay + (batchNumber * 100), maxDelay);
+                const baseDelay = 3000; // 3 second base
+                const maxDelay = 8000;  // 8 seconds max
+                const delay = Math.min(baseDelay + (batchNumber * 200), maxDelay);
                 await new Promise(r => setTimeout(r, delay));
                 // Continue processing if this is still the same job
                 if (processingRef.current) {
