@@ -218,29 +218,52 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                     <span className="font-medium text-slate-900 text-sm truncate mr-2">
                                         {selectedModelData?.display_name || selectedModel}
                                     </span>
+                                    {selectedModelData?.search_mode && selectedModelData.search_mode !== 'none' ? (
+                                        <Badge className="bg-green-100 text-green-800 text-[10px] shrink-0">
+                                            <ShieldCheck className="w-2.5 h-2.5 mr-0.5" />Verified
+                                        </Badge>
+                                    ) : (
+                                        <Badge className="bg-slate-200 text-slate-600 text-[10px] shrink-0">
+                                            <ShieldX className="w-2.5 h-2.5 mr-0.5" />Unverified
+                                        </Badge>
+                                    )}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 mb-2">
                                     <span className="text-sm text-slate-500">Web Search:</span>
-                                    {selectedModelData?.supports_web_search === true ? (
+                                    {selectedModelData?.search_mode && selectedModelData.search_mode !== 'none' ? (
                                         <div className="flex items-center gap-1 text-green-600">
                                             <CheckCircle className="w-4 h-4" />
                                             <span className="text-sm">
-                                                Auto-enabled
-                                                {webSearchOptions.length > 0 && (
-                                                    <span className="text-slate-400 ml-1">({webSearchOptions.join(', ')})</span>
-                                                )}
+                                                Verified ({selectedModelData.search_mode.replace(/_/g, ' ')})
                                             </span>
+                                        </div>
+                                    ) : selectedModelData?.supports_web_search === true ? (
+                                        <div className="flex items-center gap-1 text-amber-500">
+                                            <HelpCircle className="w-4 h-4" />
+                                            <span className="text-sm">Detected but not verified</span>
                                         </div>
                                     ) : selectedModelData?.supports_web_search === false ? (
                                         <div className="flex items-center gap-1 text-red-500">
                                             <XCircle className="w-4 h-4" /><span className="text-sm">Not supported</span>
                                         </div>
                                     ) : (
-                                        <div className="flex items-center gap-1 text-amber-500">
-                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown for this provider</span>
+                                        <div className="flex items-center gap-1 text-slate-400">
+                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown</span>
                                         </div>
                                     )}
                                 </div>
+                                {selectedModelData?.search_verified_at && (
+                                    <p className="text-xs text-slate-400 mb-1">
+                                        Last verified: {new Date(selectedModelData.search_verified_at).toLocaleDateString()}
+                                        {selectedModelData.search_verification_notes && ` — ${selectedModelData.search_verification_notes.slice(0, 80)}`}
+                                    </p>
+                                )}
+                                {(selectedModelData?.supports_web_search === true || selectedModelData?.supports_web_search === null) && (!selectedModelData?.search_mode || selectedModelData.search_mode === 'none') && (
+                                    <Button variant="outline" size="sm" onClick={verifyWebSearch} disabled={verifying} className="gap-2 mt-1">
+                                        {verifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                                        {verifying ? 'Verifying...' : 'Verify Web Search'}
+                                    </Button>
+                                )}
                                 {providerType === 'perplexity' && (
                                     <p className="text-xs text-indigo-600 mt-2">All Perplexity models include built-in web search automatically.</p>
                                 )}
@@ -248,8 +271,8 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                         </Card>
                     )}
 
-                    {/* Web search override — only shown when model supports it, for manual control */}
-                    {selectedModel && webSearchOptions.length > 0 && (
+                    {/* Web search override — only shown when model has verified search */}
+                    {selectedModel && selectedModelData?.search_mode && selectedModelData.search_mode !== 'none' && webSearchOptions.length > 0 && (
                         <div className="space-y-2">
                             <Label>Web Search Tool</Label>
                             <Select value={selectedWebSearch || 'none'} onValueChange={onSelectWebSearch}>
@@ -263,18 +286,23 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-400">Web search was auto-enabled because this model supports it. You can disable it here.</p>
+                            <p className="text-xs text-slate-400">Web search was auto-enabled because this model is verified. You can disable it here.</p>
                         </div>
                     )}
 
-                    {selectedModel && selectedModelData?.supports_web_search === false && (
+                    {/* Web search disabled for unverified models */}
+                    {selectedModel && (!selectedModelData?.search_mode || selectedModelData.search_mode === 'none') && (
                         <div className="space-y-2">
                             <Label>Web Search Tool</Label>
                             <Select value="none" disabled>
-                                <SelectTrigger className="opacity-50"><SelectValue placeholder="Not available for this model" /></SelectTrigger>
-                                <SelectContent><SelectItem value="none">Not available</SelectItem></SelectContent>
+                                <SelectTrigger className="opacity-50"><SelectValue placeholder="Not verified" /></SelectTrigger>
+                                <SelectContent><SelectItem value="none">Not verified</SelectItem></SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-500">This model doesn't support web search tools</p>
+                            <p className="text-xs text-slate-500">
+                                {selectedModelData?.supports_web_search === true
+                                    ? 'Web search detected but must be verified first. Click "Verify Web Search" above.'
+                                    : "This model doesn't support web search tools."}
+                            </p>
                         </div>
                     )}
                 </div>
