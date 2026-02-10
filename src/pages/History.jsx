@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { 
     ArrowLeft, Download, Eye, RefreshCw, Loader2, Clock, 
-    CheckCircle, XCircle, Play, Search, FileSpreadsheet, RotateCcw, Trash2
+    CheckCircle, XCircle, Play, Search, FileSpreadsheet, RotateCcw, Trash2,
+    ChevronLeft, ChevronRight
 } from 'lucide-react';
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -31,6 +32,8 @@ export default function History() {
     const [generating, setGenerating] = useState(null);
     const [rerunning, setRerunning] = useState(null);
     const [deleting, setDeleting] = useState(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const PAGE_SIZE = 10;
 
     useEffect(() => {
         loadJobs();
@@ -130,6 +133,12 @@ export default function History() {
         job.model_id?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
+    const totalPages = Math.max(1, Math.ceil(filteredJobs.length / PAGE_SIZE));
+    const paginatedJobs = filteredJobs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+    // Reset to page 1 when search changes
+    useEffect(() => { setCurrentPage(1); }, [searchTerm]);
+
     const selectedJob = jobs.find(j => j.id === selectedJobId);
 
     return (
@@ -182,7 +191,7 @@ export default function History() {
                             </Card>
                         ) : (
                             <div className="space-y-2">
-                                {filteredJobs.map((job) => {
+                                {paginatedJobs.map((job) => {
                                     const status = statusConfig[job.status] || statusConfig.queued;
                                     const StatusIcon = status.icon;
                                     const isSelected = selectedJobId === job.id;
@@ -288,6 +297,38 @@ export default function History() {
                                         </Card>
                                     );
                                 })}
+
+                                {/* Pagination */}
+                                {totalPages > 1 && (
+                                    <div className="flex items-center justify-between pt-2">
+                                        <p className="text-sm text-slate-500">
+                                            {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredJobs.length)} of {filteredJobs.length}
+                                        </p>
+                                        <div className="flex items-center gap-1">
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                disabled={currentPage === 1}
+                                                onClick={() => setCurrentPage(p => p - 1)}
+                                            >
+                                                <ChevronLeft className="w-4 h-4" />
+                                            </Button>
+                                            <span className="text-sm text-slate-600 px-2">
+                                                {currentPage} / {totalPages}
+                                            </span>
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                disabled={currentPage === totalPages}
+                                                onClick={() => setCurrentPage(p => p + 1)}
+                                            >
+                                                <ChevronRight className="w-4 h-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
