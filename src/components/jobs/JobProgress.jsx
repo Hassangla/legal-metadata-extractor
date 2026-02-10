@@ -27,8 +27,13 @@ export default function JobProgress({ jobId, onComplete }) {
     }, [jobId]);
 
     useEffect(() => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        processingRef.current = false;
+        // Reset state so stale data from the previous job isn't shown
+        setJob(null);
+        setStatusCounts(null);
+        setLoading(true);
         if (jobId) {
-            processingRef.current = false;
             loadJobStatus();
         }
         return () => {
