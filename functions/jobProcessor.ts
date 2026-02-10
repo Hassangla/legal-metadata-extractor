@@ -126,7 +126,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
                 instructions: systemPrompt,
                 input: userPrompt,
                 tools: [{ type: 'web_search' }],
-                max_output_tokens: 4096,
+                max_output_tokens: 16384,
                 store: false,
             };
             if (!isOSeries) { body.temperature = 0; }
