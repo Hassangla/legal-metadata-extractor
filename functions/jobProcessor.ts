@@ -884,19 +884,21 @@ Deno.serve(async (req) => {
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
                         // Determine if we have REAL server-side web search.
-                        // For OpenAI, additionally gate on the web search model allowlist.
-                        let hasRealWebSearch = job.web_search_choice
-                            && job.web_search_choice !== 'none'
-                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
+                        // Primary source of truth: catalogSearchMode from verified ModelCatalog.
+                        const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
+                        let hasRealWebSearch = requestedWebSearch && catalogSearchMode !== 'none';
 
-                        // OpenAI-specific: only allowlisted models can actually use web search
-                        if (hasRealWebSearch && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
-                            if (!isOpenAIWebSearchModel(job.model_id)) {
-                                hasRealWebSearch = false;
+                        // Fallback for unverified models: use legacy heuristic
+                        if (requestedWebSearch && catalogSearchMode === 'none') {
+                            const legacyCheck = job.web_search_choice !== 'none'
+                                && SERVER_SIDE_SEARCH.has(job.web_search_choice);
+                            if (legacyCheck && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
+                                hasRealWebSearch = isOpenAIWebSearchModel(job.model_id);
+                            } else {
+                                hasRealWebSearch = legacyCheck;
                             }
                         }
 
-                        // If user selected a non-server-side search tool, fall back to no search
                         const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
