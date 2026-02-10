@@ -965,11 +965,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 // Kimi echo protocol: append assistant tool_calls, then
                                 // echo each tool's arguments back as the tool result.
                                 if (choice.finish_reason === 'tool_calls' && choice.message?.tool_calls?.length > 0) {
-                                    bodyObj.messages.push({
+                                    const assistantMsg = {
                                         role: 'assistant',
                                         content: choice.message.content || null,
                                         tool_calls: choice.message.tool_calls,
-                                    });
+                                    };
+                                    // Kimi K2.5 thinking models require reasoning_content in assistant tool call messages
+                                    if (choice.message.reasoning_content !== undefined) {
+                                        assistantMsg.reasoning_content = choice.message.reasoning_content;
+                                    }
+                                    bodyObj.messages.push(assistantMsg);
 
                                     for (const tc of choice.message.tool_calls) {
                                         bodyObj.messages.push({
