@@ -360,6 +360,79 @@ function lookupStaticPricing(modelId) {
 
 // OpenRouter pricing fetch removed — using static pricing table only
 
+// ── URL EXTRACTION FROM PROVIDER TOOL ARTIFACTS ─────────────
+
+function extractToolUrlsFromOpenAIResponses(data) {
+    const urls = [];
+    if (!data || !Array.isArray(data.output)) return urls;
+    for (const item of data.output) {
+        // web_search_call results contain URLs in annotations
+        if (item.type === 'message' && Array.isArray(item.content)) {
+            for (const part of item.content) {
+                if (part.annotations && Array.isArray(part.annotations)) {
+                    for (const ann of part.annotations) {
+                        if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                    }
+                }
+            }
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function extractToolUrlsFromOpenAIChat(data) {
+    const urls = [];
+    const msg = data?.choices?.[0]?.message;
+    if (!msg) return urls;
+    // Annotations on content array items
+    if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+            if (part.annotations && Array.isArray(part.annotations)) {
+                for (const ann of part.annotations) {
+                    if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                }
+            }
+        }
+    }
+    // Top-level annotations
+    if (Array.isArray(msg.annotations)) {
+        for (const ann of msg.annotations) {
+            if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function extractToolUrlsFromAnthropic(data) {
+    const urls = [];
+    for (const block of (data?.content || [])) {
+        if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+            for (const item of block.content) {
+                if (item.url) urls.push(item.url);
+            }
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function extractToolUrlsFromGoogle(data) {
+    const urls = [];
+    const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    for (const chunk of chunks) {
+        if (chunk.web?.uri) urls.push(chunk.web.uri);
+    }
+    return [...new Set(urls)];
+}
+
+function extractToolUrlsFromPerplexity(data) {
+    const urls = [];
+    const citations = data?.citations || [];
+    for (const c of citations) {
+        if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
+    }
+    return [...new Set(urls)];
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────
 
 Deno.serve(async (req) => {
