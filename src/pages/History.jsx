@@ -31,6 +31,8 @@ export default function History() {
     const [generating, setGenerating] = useState(null);
     const [rerunning, setRerunning] = useState(null);
     const [deleting, setDeleting] = useState(null);
+    const PAGE_SIZE = 10;
+    const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
     useEffect(() => {
         loadJobs();
@@ -38,7 +40,7 @@ export default function History() {
 
     const loadJobs = async () => {
         try {
-            const allJobs = await base44.entities.Job.list('-created_date', 100);
+            const allJobs = await base44.entities.Job.list('-created_date', 200);
             setJobs(allJobs);
         } catch (error) {
             toast.error('Failed to load jobs');
