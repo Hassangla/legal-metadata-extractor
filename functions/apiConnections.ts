@@ -267,9 +267,13 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
-    // OpenAI direct: GPT-4o/4.1/4.5, o-series, chatgpt-4o support web search
+    // OpenAI direct: GPT-4o/4.5, o-series, chatgpt-4o support web search
+    // NOTE: GPT-4.1 does NOT support web search — it ignores the tool and returns "no tool available"
     if (providerKey === 'openai') {
-        if (id.includes('gpt-4o') || id.includes('gpt-4.1') || id.includes('gpt-4.5') ||
+        if (id.includes('gpt-4.1')) {
+            return { supports: false, options: [] };
+        }
+        if (id.includes('gpt-4o') || id.includes('gpt-4.5') ||
             id.includes('gpt-4-turbo') ||
             id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4') ||
             id.startsWith('chatgpt-4o')) {
