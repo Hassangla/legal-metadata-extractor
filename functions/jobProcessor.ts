@@ -119,15 +119,17 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         // Path B: All other models → Responses API + web_search tool
         // The Responses API allows any capable model to use web search as a tool.
         if (cfg.responsesUrl) {
+            const respId = (modelId || '').toLowerCase();
+            const isOSeries = /^(o1|o3|o4)/.test(respId);
             const body = {
                 model: modelId,
                 instructions: systemPrompt,
                 input: userPrompt,
                 tools: [{ type: 'web_search' }],
-                temperature: 0,
                 max_output_tokens: 4096,
-                store: false,  // Avoid storage issues with some API plans
+                store: false,
             };
+            if (!isOSeries) { body.temperature = 0; }
             return {
                 url: cfg.responsesUrl(baseUrl),
                 init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
@@ -140,24 +142,36 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
     }
 
     // Standard Chat Completions path (no web search, Kimi search, Perplexity builtin, or fallback)
+
+    // O-series reasoning models (o1, o3, o4-mini, etc.) have parameter restrictions:
+    //   - No 'temperature' parameter
+    //   - Use 'max_completion_tokens' instead of 'max_tokens'
+    //   - No 'response_format' support
+    const stdId = (modelId || '').toLowerCase();
+    const isReasoningModel = /^(o1|o3|o4)/.test(stdId);
+
     const body = {
         model: modelId,
         messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
         ],
-        max_tokens: 4096,
-        temperature: 0,
     };
+
+    if (isReasoningModel) {
+        body.max_completion_tokens = 4096;
+    } else {
+        body.max_tokens = 4096;
+        body.temperature = 0;
+    }
 
     // Kimi server-side web search uses builtin_function tool in Chat Completions
     if (webSearchChoice === 'kimi_web_search') {
         body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
-    } else if (webSearchChoice === 'none' || !webSearchChoice) {
-        // No web search — safe to use response_format for reliable JSON
-        body.response_format = { type: 'json_object' };
     }
     // Note: 'builtin' (Perplexity) needs no tools array — search is automatic.
+    // Note: response_format omitted — some models/providers reject it,
+    //       and the system prompt already instructs the model to return JSON.
 
     return {
         url: cfg.chatUrl(baseUrl, modelId),
@@ -258,7 +272,17 @@ function extractTextContent(providerType, data, isResponsesApi) {
 async function fetchWithRetry(url, init, retries) {
     retries = retries || MAX_RETRIES;
     for (let attempt = 0; attempt <= retries; attempt++) {
-        const resp = await fetch(url, init);
+        let resp;
+        try {
+            resp = await fetch(url, init);
+        } catch (networkErr) {
+            if (attempt < retries) {
+                const delay = RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            throw new Error(`Network error calling ${url.split('?')[0]}: ${networkErr.message}`);
+        }
         if (resp.ok) return resp;
         if (resp.status === 429 || resp.status >= 500) {
             if (attempt < retries) {
@@ -268,7 +292,7 @@ async function fetchWithRetry(url, init, retries) {
             }
         }
         const errText = await resp.text();
-        throw new Error(`API ${resp.status}: ${errText.slice(0, 300)}`);
+        throw new Error(`API ${resp.status} from ${url.split('?')[0]}: ${errText.slice(0, 300)}`);
     }
     throw new Error('Exhausted retries');
 }
@@ -483,23 +507,38 @@ Deno.serve(async (req) => {
                     return Response.json({ job, message: 'Job already completed' });
                 }
 
+                // Wrap entire processing in try-catch so fatal errors set job to 'error'
+                // instead of leaving it stuck in 'running'.
+                try {
+
                 await base44.entities.Job.update(job_id, { status: 'running' });
 
                 const connections = await base44.entities.APIConnection.filter({ id: job.connection_id });
                 if (!connections.length) {
-                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found' });
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found. Was it deleted?' });
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
-                const apiKey = await decryptString(conn.api_key_encrypted);
+                let apiKey;
+                try {
+                    apiKey = await decryptString(conn.api_key_encrypted);
+                } catch (decryptErr) {
+                    const msg = `Failed to decrypt API key for "${conn.name}": ${decryptErr.message}`;
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    return Response.json({ error: msg }, { status: 500 });
+                }
                 const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
 
                 const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
                 const specText = specVersions[0]?.spec_text || '';
 
-                const economyCodes = await base44.entities.EconomyCode.list();
                 const economyMap = {};
-                economyCodes.forEach((ec) => { economyMap[ec.economy.toLowerCase().trim()] = ec.economy_code; });
+                try {
+                    const economyCodes = await base44.entities.EconomyCode.list();
+                    economyCodes.forEach((ec) => { economyMap[(ec.economy || '').toLowerCase().trim()] = ec.economy_code; });
+                } catch (ecoErr) {
+                    console.error('Failed to load economy codes (non-fatal):', ecoErr.message);
+                }
 
                 // Look up stored model pricing from ModelCatalog
                 let modelInputPrice = 0;
@@ -537,8 +576,8 @@ Deno.serve(async (req) => {
                 for (const row of pendingRows) {
                     try {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
-                        const input = row.input_data;
-                        const rawEconomy = input.Economy?.toLowerCase()?.trim() || '';
+                        const input = row.input_data || {};
+                        const rawEconomy = (input.Economy || '').toLowerCase().trim();
                         const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
                         const economyCode = economyMap[resolvedEconomy] || economyMap[rawEconomy] || '';
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
@@ -563,7 +602,7 @@ Deno.serve(async (req) => {
                         // its training knowledge.
                         const specOverride = hasRealWebSearch ? '' : `
 IMPORTANT OVERRIDE — READ FIRST:
-The specification below contains a "TOOL-DEPENDENT" rule that says to return blank fields if no web search tool is available. IGNORE that rule for this request. Instead, use your training knowledge to fill in as many fields as possible. Only leave fields blank if you genuinely do not know the answer. Note "Web search not available — used training knowledge" in Missing_Conflict_Reason.
+Web search is NOT available for this request. If the specification below contains any rule that says to return blank fields when no web search tool is available, IGNORE that rule. Instead, use your training knowledge to fill in as many fields as possible. Only leave fields blank if you genuinely do not know the answer. Note "Web search not available — used training knowledge" in Missing_Conflict_Reason.
 `;
 
                         const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY.
@@ -835,10 +874,13 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                         processedCount++;
 
                     } catch (error) {
-                        await base44.entities.JobRow.update(row.id, {
-                            status: 'error',
-                            error_message: error.message?.slice(0, 500),
-                        });
+                        const diagMsg = `[${providerType}/${job.model_id}] ${error.message || 'Unknown error'}`;
+                        try {
+                            await base44.entities.JobRow.update(row.id, {
+                                status: 'error',
+                                error_message: diagMsg.slice(0, 500),
+                            });
+                        } catch (_) {}
                     }
                 }
 
@@ -883,6 +925,14 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                     processed_this_batch: processedCount,
                     remaining: pendingLeft,
                 });
+
+                } catch (fatalErr) {
+                    const fatalMsg = `Fatal processing error: ${fatalErr.message || 'Unknown'}`;
+                    try {
+                        await base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) });
+                    } catch (_) {}
+                    return Response.json({ error: fatalMsg }, { status: 500 });
+                }
             }
 
             case 'getStatus': {
