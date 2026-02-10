@@ -200,7 +200,7 @@ export default function History() {
                                                             <Badge className={`${status.bg} ${status.color}`}>
                                                                 {status.label}
                                                             </Badge>
-                                                            {job.status === 'done' && job.estimated_cost_usd > 0 && (
+                                                            {(job.estimated_cost_usd > 0 || job.total_input_tokens > 0) && (
                                                                 <p className="text-xs text-green-600 mt-1">
                                                                     ${job.estimated_cost_usd < 0.01 ? '<0.01' : job.estimated_cost_usd.toFixed(4)}
                                                                 </p>

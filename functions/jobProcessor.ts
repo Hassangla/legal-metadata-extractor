@@ -217,7 +217,11 @@ const MODEL_PRICING = {
     'mistral-small':       { input: 0.10,  output: 0.30 },
 };
 
-function estimateCost(modelId, providerType, inputTokens, outputTokens) {
+function estimateCostFromPricing(inputPricePerMillion, outputPricePerMillion, inputTokens, outputTokens) {
+    return ((inputTokens * inputPricePerMillion) + (outputTokens * outputPricePerMillion)) / 1_000_000;
+}
+
+function estimateCostFromTable(modelId, inputTokens, outputTokens) {
     const id = (modelId || '').toLowerCase();
 
     if (MODEL_PRICING[id]) {
@@ -323,6 +327,20 @@ Deno.serve(async (req) => {
                 const economyCodes = await base44.entities.EconomyCode.list();
                 const economyMap = {};
                 economyCodes.forEach((ec) => { economyMap[ec.economy.toLowerCase().trim()] = ec.economy_code; });
+
+                // Look up stored model pricing from ModelCatalog
+                let modelInputPrice = 0;
+                let modelOutputPrice = 0;
+                try {
+                    const catalogEntries = await base44.entities.ModelCatalog.filter({
+                        connection_id: job.connection_id,
+                        model_id: job.model_id,
+                    });
+                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
+                        modelInputPrice = catalogEntries[0].input_price_per_million;
+                        modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
+                    }
+                } catch (_) {}
 
                 const allRows = await base44.entities.JobRow.filter({ job_id });
                 const pendingRows = allRows
@@ -516,9 +534,14 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                     total_output_tokens: totalOutputTokens,
                 };
 
-                // Calculate estimated cost if job is done
-                if (newStatus === 'done') {
-                    const cost = estimateCost(job.model_id, job.provider_type, totalInputTokens, totalOutputTokens);
+                // Calculate estimated cost every batch
+                if (totalInputTokens > 0 || totalOutputTokens > 0) {
+                    let cost;
+                    if (modelInputPrice > 0) {
+                        cost = estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens);
+                    } else {
+                        cost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                    }
                     updatePayload.estimated_cost_usd = cost;
                 }
 
@@ -639,14 +662,28 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                 const doneRows = allRows.filter(r => r.status === 'done');
                 const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
                 const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
-                const cost = estimateCost(job.model_id, job.provider_type, totalInputTokens, totalOutputTokens);
+
+                // Look up stored pricing for stop cost
+                let stopCost;
+                try {
+                    const catalogEntries = await base44.entities.ModelCatalog.filter({
+                        connection_id: job.connection_id,
+                        model_id: job.model_id,
+                    });
+                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
+                        stopCost = estimateCostFromPricing(catalogEntries[0].input_price_per_million, catalogEntries[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens);
+                    }
+                } catch (_) {}
+                if (stopCost === undefined) {
+                    stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                }
 
                 await base44.entities.Job.update(job_id, {
                     status: 'done',
                     error_message: `Stopped by user. ${stopped} rows skipped.`,
                     total_input_tokens: totalInputTokens,
                     total_output_tokens: totalOutputTokens,
-                    estimated_cost_usd: cost,
+                    estimated_cost_usd: stopCost,
                 });
 
                 return Response.json({ success: true, stopped });

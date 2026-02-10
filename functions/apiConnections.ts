@@ -336,6 +336,91 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
     return { supports: null, options: [] };
 }
 
+// ── STATIC MODEL PRICING ($ per million tokens) ────────────
+const STATIC_PRICING = {
+    'gpt-4o':              { input: 2.50,  output: 10.00 },
+    'gpt-4o-mini':         { input: 0.15,  output: 0.60 },
+    'gpt-4o-search-preview': { input: 2.50, output: 10.00 },
+    'gpt-4-turbo':         { input: 10.00, output: 30.00 },
+    'gpt-4.1':             { input: 2.00,  output: 8.00 },
+    'gpt-4.1-mini':        { input: 0.40,  output: 1.60 },
+    'gpt-4.1-nano':        { input: 0.10,  output: 0.40 },
+    'gpt-4.5-preview':     { input: 75.00, output: 150.00 },
+    'gpt-3.5-turbo':       { input: 0.50,  output: 1.50 },
+    'chatgpt-4o-latest':   { input: 5.00,  output: 15.00 },
+    'o1':                  { input: 15.00, output: 60.00 },
+    'o1-mini':             { input: 1.10,  output: 4.40 },
+    'o1-preview':          { input: 15.00, output: 60.00 },
+    'o3':                  { input: 2.00,  output: 8.00 },
+    'o3-mini':             { input: 1.10,  output: 4.40 },
+    'o4-mini':             { input: 1.10,  output: 4.40 },
+    'claude-sonnet-4':     { input: 3.00,  output: 15.00 },
+    'claude-opus-4':       { input: 15.00, output: 75.00 },
+    'claude-haiku-3.5':    { input: 0.80,  output: 4.00 },
+    'claude-3-5-sonnet':   { input: 3.00,  output: 15.00 },
+    'claude-3-5-haiku':    { input: 0.80,  output: 4.00 },
+    'claude-3-opus':       { input: 15.00, output: 75.00 },
+    'gemini-2.5-pro':      { input: 1.25,  output: 10.00 },
+    'gemini-2.5-flash':    { input: 0.15,  output: 0.60 },
+    'gemini-2.0-flash':    { input: 0.10,  output: 0.40 },
+    'gemini-1.5-pro':      { input: 1.25,  output: 5.00 },
+    'gemini-1.5-flash':    { input: 0.075, output: 0.30 },
+    'moonshot-v1-auto':    { input: 0.55,  output: 0.55 },
+    'moonshot-v1-8k':      { input: 0.17,  output: 0.17 },
+    'moonshot-v1-32k':     { input: 0.33,  output: 0.33 },
+    'moonshot-v1-128k':    { input: 0.83,  output: 0.83 },
+    'kimi-latest':         { input: 0.55,  output: 0.55 },
+    'deepseek-chat':       { input: 0.14,  output: 0.28 },
+    'deepseek-reasoner':   { input: 0.55,  output: 2.19 },
+    'sonar':               { input: 1.00,  output: 1.00 },
+    'sonar-pro':           { input: 3.00,  output: 15.00 },
+    'sonar-reasoning':     { input: 1.00,  output: 5.00 },
+    'sonar-reasoning-pro': { input: 2.00,  output: 8.00 },
+    'grok-3':              { input: 3.00,  output: 15.00 },
+    'grok-3-mini':         { input: 0.30,  output: 0.50 },
+    'grok-2':              { input: 2.00,  output: 10.00 },
+    'mistral-large':       { input: 2.00,  output: 6.00 },
+    'mistral-small':       { input: 0.10,  output: 0.30 },
+};
+
+function lookupStaticPricing(modelId) {
+    const id = (modelId || '').toLowerCase();
+    if (STATIC_PRICING[id]) return STATIC_PRICING[id];
+    for (const [key, p] of Object.entries(STATIC_PRICING)) {
+        if (id.startsWith(key) || id.includes(key)) return p;
+    }
+    return null;
+}
+
+async function fetchOpenRouterPricing() {
+    try {
+        const resp = await fetch('https://openrouter.ai/api/v1/models', {
+            headers: { 'Content-Type': 'application/json' },
+        });
+        if (!resp.ok) return {};
+        const data = await resp.json();
+        const pricingMap = {};
+        for (const model of (data.data || [])) {
+            if (model.pricing) {
+                const promptPerToken = parseFloat(model.pricing.prompt) || 0;
+                const completionPerToken = parseFloat(model.pricing.completion) || 0;
+                pricingMap[model.id] = {
+                    input: promptPerToken * 1_000_000,
+                    output: completionPerToken * 1_000_000,
+                };
+                const shortName = model.id.split('/').pop();
+                if (shortName && !pricingMap[shortName]) {
+                    pricingMap[shortName] = pricingMap[model.id];
+                }
+            }
+        }
+        return pricingMap;
+    } catch (e) {
+        console.error('Failed to fetch OpenRouter pricing:', e.message);
+        return {};
+    }
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -677,6 +762,78 @@ Deno.serve(async (req) => {
                 return Response.json({ providers: summary });
             }
 
+            case 'fetchPricing': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin only' }, { status: 403 });
+                }
+                const { connection_id: pricingConnId } = params;
+                let livePricing = {};
+                try { livePricing = await fetchOpenRouterPricing(); } catch (_) {}
+
+                let pricingModels;
+                if (pricingConnId) {
+                    pricingModels = await base44.entities.ModelCatalog.filter({ connection_id: pricingConnId });
+                } else {
+                    pricingModels = await base44.entities.ModelCatalog.list();
+                }
+
+                let pricingUpdated = 0;
+                for (const m of pricingModels) {
+                    const mid = (m.model_id || '').toLowerCase();
+                    let price = livePricing[mid];
+                    if (!price) {
+                        for (const [key, p] of Object.entries(livePricing)) {
+                            if (key.endsWith('/' + mid) || mid.includes(key.split('/').pop())) {
+                                price = p; break;
+                            }
+                        }
+                    }
+                    const source = price ? 'openrouter' : null;
+                    if (!price) {
+                        price = lookupStaticPricing(mid);
+                        if (price && m.pricing_source === 'manual') continue;
+                    }
+                    if (price && (m.input_price_per_million !== price.input || m.output_price_per_million !== price.output)) {
+                        await base44.entities.ModelCatalog.update(m.id, {
+                            input_price_per_million: price.input,
+                            output_price_per_million: price.output,
+                            pricing_source: source || (m.pricing_source === 'manual' ? 'manual' : 'static'),
+                        });
+                        pricingUpdated++;
+                    }
+                }
+                return Response.json({ success: true, updated: pricingUpdated, total: pricingModels.length, live_pricing_models: Object.keys(livePricing).length });
+            }
+
+            case 'updateModelPrice': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin only' }, { status: 403 });
+                }
+                const { model_catalog_id, input_price, output_price } = params;
+                if (!model_catalog_id) return Response.json({ error: 'model_catalog_id required' }, { status: 400 });
+                await base44.entities.ModelCatalog.update(model_catalog_id, {
+                    input_price_per_million: parseFloat(input_price) || 0,
+                    output_price_per_million: parseFloat(output_price) || 0,
+                    pricing_source: 'manual',
+                });
+                return Response.json({ success: true });
+            }
+
+            case 'getModelPricing': {
+                const allModels = await base44.entities.ModelCatalog.list();
+                const allConns = await base44.entities.APIConnection.list();
+                const connMap = {};
+                allConns.forEach(c => { connMap[c.id] = c.name; });
+                const result = allModels.map(m => ({
+                    id: m.id, model_id: m.model_id, display_name: m.display_name,
+                    connection_id: m.connection_id, connection_name: connMap[m.connection_id] || 'Unknown',
+                    input_price_per_million: m.input_price_per_million || 0,
+                    output_price_per_million: m.output_price_per_million || 0,
+                    pricing_source: m.pricing_source || '',
+                }));
+                return Response.json({ models: result });
+            }
+
             default:
                 return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
         }
@@ -715,6 +872,8 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
             model_id: m.id,
         });
 
+        const pricing = lookupStaticPricing(m.id);
+
         if (existing.length === 0) {
             await base44.entities.ModelCatalog.create({
                 connection_id: connectionId,
@@ -723,9 +882,11 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 supports_web_search: ws.supports,
                 web_search_options: ws.options,
                 last_checked_at: now,
+                input_price_per_million: pricing?.input || 0,
+                output_price_per_million: pricing?.output || 0,
+                pricing_source: pricing ? 'static' : '',
             });
         } else {
-            // Preserve manually probed web search if auto-detect returns null
             const update = {
                 display_name: m.name,
                 last_checked_at: now,
@@ -733,6 +894,11 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
             if (ws.supports !== null) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
+            }
+            if ((!existing[0].input_price_per_million || existing[0].pricing_source !== 'manual') && pricing) {
+                update.input_price_per_million = pricing.input;
+                update.output_price_per_million = pricing.output;
+                update.pricing_source = 'static';
             }
             await base44.entities.ModelCatalog.update(existing[0].id, update);
         }

@@ -278,7 +278,7 @@ export default function JobProgress({ jobId, onComplete }) {
                 )}
 
                 {/* Token usage & cost */}
-                {job.status === 'done' && (job.total_input_tokens > 0 || job.estimated_cost_usd > 0) && (
+                {(job.total_input_tokens > 0 || job.estimated_cost_usd > 0) && (
                     <div className="p-3 bg-slate-50 rounded-lg text-sm space-y-1">
                         <div className="flex justify-between">
                             <span className="text-slate-500">Tokens:</span>
