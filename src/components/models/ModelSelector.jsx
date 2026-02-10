@@ -66,16 +66,41 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
         }
     };
 
-    // ── Auto-enable web search when user selects a model that supports it ──
+    // ── Auto-enable web search when user selects a model with verified search ──
     useEffect(() => {
         if (!selectedModel || models.length === 0) return;
         const model = models.find(m => m.model_id === selectedModel);
-        if (model?.supports_web_search === true && model?.web_search_options?.length > 0) {
+        const isVerified = model?.search_mode && model.search_mode !== 'none';
+        if (isVerified && model?.web_search_options?.length > 0) {
             onSelectWebSearch(model.web_search_options[0]);
         } else {
             onSelectWebSearch('none');
         }
     }, [selectedModel, models]);
+
+    const verifyWebSearch = async () => {
+        if (!connectionId || !selectedModel) return;
+        setVerifying(true);
+        try {
+            const resp = await base44.functions.invoke('apiConnections', {
+                action: 'verifyWebSearch',
+                connection_id: connectionId,
+                model_id: selectedModel,
+            });
+            const result = resp.data;
+            if (result.verified) {
+                toast.success(`Web search verified: ${result.search_mode}`);
+            } else {
+                toast.info(`Web search not available: ${result.notes}`);
+            }
+            // Reload models to get updated search_mode
+            await loadCachedModels();
+        } catch {
+            toast.error('Verification failed');
+        } finally {
+            setVerifying(false);
+        }
+    };
 
     const selectedModelData = models.find(m => m.model_id === selectedModel);
     const webSearchOptions = selectedModelData?.web_search_options || [];
