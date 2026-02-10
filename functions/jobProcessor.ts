@@ -416,16 +416,18 @@ Deno.serve(async (req) => {
 
                         const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY. Always respond with valid JSON only — no markdown, no explanation, no code fences.\n\n${specText}`;
 
-                        const userPrompt = `Extract legal instrument metadata for this row.
+                        // Determine if we have REAL server-side web search
+                        const hasRealWebSearch = job.web_search_choice
+                            && job.web_search_choice !== 'none'
+                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
 
-INPUT DATA:
-- Economy: ${input.Economy}
-- Economy_Code: ${economyCode}
-- Legal basis: ${legalBasis}
-- Question: ${input.Question}
-- Topic: ${input.Topic}
+                        // If user selected a non-server-side search tool, fall back to no search
+                        const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
-SEARCH QUERIES (use for web search; adapt to local language if non-English economy):
+                        // Build user prompt — conditional on whether real web search is available
+                        let searchInstructions;
+                        if (hasRealWebSearch) {
+                            searchInstructions = `SEARCH QUERIES (use the web search tool to research; adapt to local language if non-English economy):
 1. ${query1}
 2. ${query2}
 3. ${query3}
@@ -436,9 +438,36 @@ INSTRUCTIONS:
 3. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
 4. Determine Language_Doc (language of official publication), Enactment_Date, Date_of_Entry_in_Force, Current_Status.
 5. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
-6. Record all evidence, URLs considered, tier, and reasoning.
+6. Record all evidence, URLs considered, tier, and reasoning.`;
+                        } else {
+                            searchInstructions = `NOTE: Web search is NOT available for this request. Use your training knowledge and any information you know about this legal instrument to extract the metadata as accurately as possible.
 
-Return a JSON object with EXACTLY this structure (no extra keys, no missing keys):
+REFERENCE QUERIES (for context only — do NOT attempt to call any search tool):
+1. ${query1}
+2. ${query2}
+3. ${query3}
+
+INSTRUCTIONS:
+1. Use your training knowledge to identify the legal instrument described above.
+2. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
+3. Determine Language_Doc, Enactment_Date, Date_of_Entry_in_Force, Current_Status based on your knowledge.
+4. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
+5. For any field you cannot verify without web search, leave it blank and explain in Missing_Conflict_Reason that web search was not available.
+6. Record your reasoning in the evidence fields. For URLs, provide the most likely official source URL if you know it, otherwise leave blank.`;
+                        }
+
+                        const userPrompt = `Extract legal instrument metadata for this row.
+
+INPUT DATA:
+- Economy: ${input.Economy}
+- Economy_Code: ${economyCode}
+- Legal basis: ${legalBasis}
+- Question: ${input.Question}
+- Topic: ${input.Topic}
+
+${searchInstructions}
+
+Return a JSON object with EXACTLY this structure (no extra keys, no missing keys). Return ONLY valid JSON — no markdown fences, no explanation text, no code blocks:
 {
   "output": {
     "Economy_Code": "${economyCode}",
@@ -474,14 +503,6 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
     "Normalization_Notes": ""
   }
 }`;
-
-                        // Determine if we have REAL server-side web search
-                        const hasRealWebSearch = job.web_search_choice
-                            && job.web_search_choice !== 'none'
-                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
-
-                        // If user selected a non-server-side search tool, fall back to no search
-                        const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
                         const { url, init } = buildLLMRequest(
                             providerType, job.model_id, systemPrompt, userPrompt,
