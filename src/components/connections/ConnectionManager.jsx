@@ -121,11 +121,18 @@ export default function ConnectionManager({ onSelect, selectedId }) {
     const handleDelete = async (connectionId) => {
         if (!confirm('Delete this connection and all its cached models?')) return;
         try {
-            await base44.functions.invoke('apiConnections', { action: 'delete', connection_id: connectionId });
-            toast.success('Connection deleted');
-            loadConnections();
-            if (selectedId === connectionId) onSelect?.(null);
-        } catch { toast.error('Failed to delete'); }
+            const resp = await base44.functions.invoke('apiConnections', { action: 'delete', connection_id: connectionId });
+            if (resp.data?.error) {
+                toast.error(resp.data.error);
+            } else {
+                toast.success('Connection deleted');
+                loadConnections();
+                if (selectedId === connectionId) onSelect?.(null);
+            }
+        } catch (err) {
+            const msg = err?.response?.data?.error || err?.message || 'Unknown error';
+            toast.error(`Failed to delete: ${msg}`);
+        }
     };
 
     const applyPreset = (key) => {
