@@ -29,76 +29,95 @@ Deno.serve(async (req) => {
         const rows = await base44.entities.JobRow.filter({ job_id });
         rows.sort((a, b) => a.row_index - b.row_index);
 
-        // ── OUTPUT SHEET (13 columns) ──
-        // Derive from evidence_json.Final_* when present (new format).
-        // Fall back to output_json for backward compatibility with older rows.
-        const outputData = rows.map(row => {
+        // ── OUTPUT SHEET — exactly 13 columns, exact order via aoa_to_sheet ──
+        const OUTPUT_HEADERS = [
+            'ID', 'Economy_Code', 'Economy', 'Language_Doc',
+            'Instrument_Full_Name_Original_Language', 'Instrument_Published_Name',
+            'Instrument_URL', 'Enactment_Date', 'Date of Entry in Force',
+            'Repeal_Year', 'Current Status', 'Public', 'Flag',
+        ];
+
+        const outputAoa = [OUTPUT_HEADERS];
+        for (const row of rows) {
             const e = row.evidence_json || {};
             const o = row.output_json || {};
             const input = row.input_data || {};
             const hasFinals = e.Final_Flag !== undefined;
-            return {
-                'ID': '',
-                'Economy_Code': e.Economy_Code || o.Economy_Code || '',
-                'Economy': e.Economy || o.Economy || input.Economy || '',
-                'Language_Doc': hasFinals ? (e.Final_Language_Doc || '') : (o.Language_Doc || ''),
-                'Instrument_Full_Name_Original_Language': hasFinals ? (e.Final_Instrument_Full_Name_Original_Language || '') : (o.Instrument_Full_Name_Original_Language || ''),
-                'Instrument_Published_Name': hasFinals ? (e.Final_Instrument_Published_Name || '') : (o.Instrument_Published_Name || ''),
-                'Instrument_URL': hasFinals ? (e.Final_Instrument_URL || '') : (o.Instrument_URL || ''),
-                'Enactment_Date': hasFinals ? (e.Final_Enactment_Date || '') : (o.Enactment_Date || ''),
-                'Date of Entry in Force': hasFinals ? (e.Final_Date_of_Entry_in_Force || '') : (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
-                'Repeal_Year': hasFinals ? (e.Final_Repeal_Year || '') : (o.Repeal_Year || ''),
-                'Current Status': hasFinals ? (e.Final_Current_Status || '') : (o.Current_Status || o['Current Status'] || ''),
-                'Public': hasFinals ? (e.Final_Public || '') : (o.Public || ''),
-                'Flag': hasFinals ? (e.Final_Flag || '') : (o.Flag || ''),
-            };
-        });
+            outputAoa.push([
+                '',  // ID — blank, do not edit
+                e.Economy_Code || o.Economy_Code || '',
+                e.Economy || o.Economy || input.Economy || '',
+                hasFinals ? (e.Final_Language_Doc || '') : (o.Language_Doc || ''),
+                hasFinals ? (e.Final_Instrument_Full_Name_Original_Language || '') : (o.Instrument_Full_Name_Original_Language || ''),
+                hasFinals ? (e.Final_Instrument_Published_Name || '') : (o.Instrument_Published_Name || ''),
+                hasFinals ? (e.Final_Instrument_URL || '') : (o.Instrument_URL || ''),
+                hasFinals ? (e.Final_Enactment_Date || '') : (o.Enactment_Date || ''),
+                hasFinals ? (e.Final_Date_of_Entry_in_Force || '') : (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
+                hasFinals ? (e.Final_Repeal_Year || '') : (o.Repeal_Year || ''),
+                hasFinals ? (e.Final_Current_Status || '') : (o.Current_Status || o['Current Status'] || ''),
+                hasFinals ? (e.Final_Public || '') : (o.Public || ''),
+                hasFinals ? (e.Final_Flag || '') : (o.Flag || ''),
+            ]);
+        }
 
-        // ── EVIDENCE SHEET (30 columns) ──
-        const evidenceData = rows.map(row => {
+        // ── EVIDENCE SHEET — exact column order via aoa_to_sheet ──
+        const EVIDENCE_HEADERS = [
+            'Row_Index', 'Economy', 'Economy_Code', 'Legal_basis_verbatim',
+            'Query_1', 'Query_2', 'Query_3',
+            'URLs_Considered', 'Selected_Source_URLs', 'Source_Tier', 'Public_Access',
+            'Raw_Official_Title_As_Source', 'Normalized_Title_Used',
+            'Language_Justification', 'Instrument_URL_Support',
+            'Enactment_Support', 'EntryIntoForce_Support', 'Status_Support',
+            'Missing/Conflict_Reason', 'Normalization_Notes',
+            'Final_Language_Doc', 'Final_Instrument_Full_Name_Original_Language',
+            'Final_Instrument_Published_Name', 'Final_Instrument_URL',
+            'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
+            'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
+        ];
+
+        const evidenceAoa = [EVIDENCE_HEADERS];
+        for (const row of rows) {
             const e = row.evidence_json || {};
             const o = row.output_json || {};
             const input = row.input_data || {};
-
-            return {
-                'Row_Index': e.Row_Index || row.row_index,
-                'Economy': e.Economy || o.Economy || input.Economy || '',
-                'Economy_Code': e.Economy_Code || o.Economy_Code || '',
-                'Legal_basis_verbatim': e.Legal_basis_verbatim || input.Legal_basis || input['Legal basis'] || '',
-                'Query_1': e.Query_1 || '',
-                'Query_2': e.Query_2 || '',
-                'Query_3': e.Query_3 || '',
-                'URLs_Considered': e.URLs_Considered || '',
-                'Selected_Source_URLs': e.Selected_Source_URLs || '',
-                'Source_Tier': e.Source_Tier || e.Tier || '',
-                'Public_Access': e.Public_Access || '',
-                'Raw_Official_Title_As_Source': e.Raw_Official_Title_As_Source || '',
-                'Normalized_Title_Used': e.Normalized_Title_Used || '',
-                'Language_Justification': e.Language_Justification || '',
-                'Instrument_URL_Support': e.Instrument_URL_Support || '',
-                'Enactment_Support': e.Enactment_Support || '',
-                'EntryIntoForce_Support': e.EntryIntoForce_Support || '',
-                'Status_Support': e.Status_Support || '',
-                'Missing_Conflict_Reason': e.Missing_Conflict_Reason || e['Missing/Conflict_Reason'] || '',
-                'Normalization_Notes': e.Normalization_Notes || '',
-                // Final_* fields — read from evidence_json directly; fall back to output_json for older rows
-                'Final_Language_Doc': e.Final_Language_Doc ?? o.Language_Doc ?? '',
-                'Final_Instrument_Full_Name_Original_Language': e.Final_Instrument_Full_Name_Original_Language ?? o.Instrument_Full_Name_Original_Language ?? '',
-                'Final_Instrument_Published_Name': e.Final_Instrument_Published_Name ?? o.Instrument_Published_Name ?? '',
-                'Final_Instrument_URL': e.Final_Instrument_URL ?? o.Instrument_URL ?? '',
-                'Final_Enactment_Date': e.Final_Enactment_Date ?? o.Enactment_Date ?? '',
-                'Final_Date_of_Entry_in_Force': e.Final_Date_of_Entry_in_Force ?? (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
-                'Final_Repeal_Year': e.Final_Repeal_Year ?? o.Repeal_Year ?? '',
-                'Final_Current_Status': e.Final_Current_Status ?? (o.Current_Status || o['Current Status'] || ''),
-                'Final_Public': e.Final_Public ?? o.Public ?? '',
-                'Final_Flag': e.Final_Flag ?? o.Flag ?? '',
-            };
-        });
+            evidenceAoa.push([
+                e.Row_Index || row.row_index,
+                e.Economy || o.Economy || input.Economy || '',
+                e.Economy_Code || o.Economy_Code || '',
+                e.Legal_basis_verbatim || input.Legal_basis || input['Legal basis'] || '',
+                e.Query_1 || '',
+                e.Query_2 || '',
+                e.Query_3 || '',
+                e.URLs_Considered || '',
+                e.Selected_Source_URLs || '',
+                e.Source_Tier || e.Tier || '',
+                e.Public_Access || '',
+                e.Raw_Official_Title_As_Source || '',
+                e.Normalized_Title_Used || '',
+                e.Language_Justification || '',
+                e.Instrument_URL_Support || '',
+                e.Enactment_Support || '',
+                e.EntryIntoForce_Support || '',
+                e.Status_Support || '',
+                e.Missing_Conflict_Reason || e['Missing/Conflict_Reason'] || '',
+                e.Normalization_Notes || '',
+                e.Final_Language_Doc ?? o.Language_Doc ?? '',
+                e.Final_Instrument_Full_Name_Original_Language ?? o.Instrument_Full_Name_Original_Language ?? '',
+                e.Final_Instrument_Published_Name ?? o.Instrument_Published_Name ?? '',
+                e.Final_Instrument_URL ?? o.Instrument_URL ?? '',
+                e.Final_Enactment_Date ?? o.Enactment_Date ?? '',
+                e.Final_Date_of_Entry_in_Force ?? (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
+                e.Final_Repeal_Year ?? o.Repeal_Year ?? '',
+                e.Final_Current_Status ?? (o.Current_Status || o['Current Status'] || ''),
+                e.Final_Public ?? o.Public ?? '',
+                e.Final_Flag ?? o.Flag ?? '',
+            ]);
+        }
 
         const wb = XLSX.utils.book_new();
-        const wsOutput = XLSX.utils.json_to_sheet(outputData);
+        const wsOutput = XLSX.utils.aoa_to_sheet(outputAoa);
         XLSX.utils.book_append_sheet(wb, wsOutput, 'Output');
-        const wsEvidence = XLSX.utils.json_to_sheet(evidenceData);
+        const wsEvidence = XLSX.utils.aoa_to_sheet(evidenceAoa);
         XLSX.utils.book_append_sheet(wb, wsEvidence, 'Evidence');
 
         const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
