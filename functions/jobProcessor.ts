@@ -469,22 +469,90 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                             job.web_search_choice, conn.base_url, apiKey
                         );
 
-                        const response = await fetchWithRetry(url, init);
-                        const data = await response.json();
-                        const content = extractTextContent(providerType, data);
-                        let parsed = extractJSON(content);
+                        // Determine if this provider needs a tool-call conversation loop.
+                        // Kimi ($web_search), DeepSeek, xAI etc. return finish_reason="tool_calls"
+                        // and expect you to append tool results and call again until "stop".
+                        // Anthropic, Google, and OpenAI web_search_preview handle tools server-side (single call).
+                        const cfgLoop = CHAT_CONFIGS[providerType] || CHAT_CONFIGS.openai_compatible;
+                        const needsToolLoop = cfgLoop.chatFormat === 'openai' &&
+                            job.web_search_choice &&
+                            job.web_search_choice !== 'none' &&
+                            job.web_search_choice !== 'web_search_preview' &&
+                            job.web_search_choice !== 'builtin';
 
-                        // Track token usage from API response
+                        let data;
                         let inputTokens = 0;
                         let outputTokens = 0;
-                        if (data.usage) {
-                            inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
-                            outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
-                        } else if (data.usageMetadata) {
-                            // Google format
-                            inputTokens = data.usageMetadata.promptTokenCount || 0;
-                            outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+
+                        if (needsToolLoop) {
+                            // ── Multi-turn tool-call loop (Kimi, DeepSeek, xAI, etc.) ──
+                            const bodyObj = JSON.parse(init.body);
+                            const MAX_TOOL_LOOPS = 10;
+
+                            for (let loop = 0; loop <= MAX_TOOL_LOOPS; loop++) {
+                                const loopResp = await fetchWithRetry(url, {
+                                    method: 'POST',
+                                    headers: init.headers,
+                                    body: JSON.stringify(bodyObj),
+                                });
+                                data = await loopResp.json();
+
+                                // Accumulate token usage from every round-trip
+                                if (data.usage) {
+                                    inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                                    outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0;
+                                }
+
+                                const choice = data.choices?.[0];
+                                if (!choice) break;
+
+                                // Final answer received
+                                if (choice.finish_reason === 'stop') break;
+
+                                // Model has content (some providers return content + tool_calls together)
+                                if (choice.message?.content &&
+                                    typeof choice.message.content === 'string' &&
+                                    choice.message.content.length > 20) {
+                                    break;
+                                }
+
+                                // Model wants to call tools — append and continue
+                                if (choice.finish_reason === 'tool_calls' && choice.message?.tool_calls?.length > 0) {
+                                    bodyObj.messages.push({
+                                        role: 'assistant',
+                                        content: choice.message.content || null,
+                                        tool_calls: choice.message.tool_calls,
+                                    });
+
+                                    for (const tc of choice.message.tool_calls) {
+                                        bodyObj.messages.push({
+                                            role: 'tool',
+                                            tool_call_id: tc.id,
+                                            content: tc.function?.arguments || JSON.stringify({ status: 'ok' }),
+                                        });
+                                    }
+                                    continue;
+                                }
+
+                                // Unknown finish_reason — break to avoid infinite loop
+                                break;
+                            }
+                        } else {
+                            // ── Single call (Anthropic, Google, OpenAI web_search_preview, no web search) ──
+                            const resp = await fetchWithRetry(url, init);
+                            data = await resp.json();
+
+                            if (data.usage) {
+                                inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
+                                outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
+                            } else if (data.usageMetadata) {
+                                inputTokens = data.usageMetadata.promptTokenCount || 0;
+                                outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+                            }
                         }
+
+                        const content = extractTextContent(providerType, data);
+                        let parsed = extractJSON(content);
 
                         if (!parsed) {
                             const hasToolCalls = !!(data.choices?.[0]?.message?.tool_calls?.length);
