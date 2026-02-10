@@ -1045,6 +1045,7 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
     for (const m of models) {
         // Auto-detect web search support from provider + model name
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
+        const candidate = detectSearchModeCandidate(providerKey, m.id, baseUrl);
 
         const existing = await base44.entities.ModelCatalog.filter({
             connection_id: connectionId,
@@ -1060,6 +1061,7 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 display_name: m.name,
                 supports_web_search: ws.supports,
                 web_search_options: ws.options,
+                search_mode: 'none',  // Not verified yet — always starts as none
                 last_checked_at: now,
                 input_price_per_million: pricing?.input || 0,
                 output_price_per_million: pricing?.output || 0,
@@ -1073,6 +1075,10 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
             if (ws.supports !== null) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
+            }
+            // Don't overwrite a verified search_mode
+            if (!existing[0].search_mode || existing[0].search_mode === 'none') {
+                // Keep as none until verified
             }
             if ((!existing[0].input_price_per_million || existing[0].pricing_source !== 'manual') && pricing) {
                 update.input_price_per_million = pricing.input;
