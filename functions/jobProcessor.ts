@@ -448,24 +448,95 @@ function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
     return false;
 }
 
-// ── URL VERIFICATION HELPER ──────────────────────────────────
+// ── URL SAFETY & VERIFICATION HELPERS ────────────────────────
+
+function isSafeHttpUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    let parsed;
+    try { parsed = new URL(urlStr); } catch (_) { return false; }
+
+    // Only http/https
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    // Reject embedded credentials
+    if (parsed.username || parsed.password) return false;
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Reject localhost and .local
+    if (hostname === 'localhost' || hostname.endsWith('.local')) return false;
+
+    // Reject literal private/reserved IPs
+    // Split IPv4; also handle IPv6 [::1] etc.
+    if (hostname === '[::1]' || hostname === '::1') return false;
+    const ipMatch = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipMatch) {
+        const [, a, b, c] = ipMatch.map(Number);
+        if (a === 127) return false;                       // 127.0.0.0/8
+        if (a === 10) return false;                        // 10.0.0.0/8
+        if (a === 172 && b >= 16 && b <= 31) return false; // 172.16.0.0/12
+        if (a === 192 && b === 168) return false;          // 192.168.0.0/16
+        if (a === 169 && b === 254) return false;          // 169.254.0.0/16
+        if (a === 0) return false;                         // 0.0.0.0/8
+    }
+
+    return true;
+}
 
 async function verifyUrlLoads(url) {
-    if (!url || typeof url !== 'string') return false;
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const resp = await fetch(url, {
-            method: 'HEAD',
-            signal: controller.signal,
-            redirect: 'follow',
-        });
-        clearTimeout(timeoutId);
-        // Accept any 2xx or 3xx as "loads"
-        return resp.status >= 200 && resp.status < 400;
-    } catch (_) {
-        return false;
+    if (!isSafeHttpUrl(url)) return false;
+
+    const MAX_REDIRECTS = 5;
+    const TIMEOUT_MS = 8000;
+
+    // Inner fetch that manually follows redirects with safety checks
+    async function safeFetch(targetUrl, method, extraHeaders) {
+        let current = targetUrl;
+        for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            if (!isSafeHttpUrl(current)) return null;
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+            let resp;
+            try {
+                resp = await fetch(current, {
+                    method,
+                    headers: extraHeaders || {},
+                    signal: controller.signal,
+                    redirect: 'manual',
+                });
+            } catch (_) {
+                clearTimeout(timeoutId);
+                return null;
+            }
+            clearTimeout(timeoutId);
+
+            // 3xx redirect — follow manually after safety check
+            if (resp.status >= 300 && resp.status < 400) {
+                const location = resp.headers.get('location');
+                if (!location) return null;
+                // Resolve relative redirects
+                try { current = new URL(location, current).href; } catch (_) { return null; }
+                continue;
+            }
+
+            return resp;
+        }
+        return null; // exceeded max redirects
     }
+
+    // 1) Try HEAD first
+    let resp = await safeFetch(url, 'HEAD');
+    if (resp && resp.status >= 200 && resp.status < 400) return true;
+
+    // 2) If HEAD failed (403/405/404 or network error), fallback to GET with Range header
+    const headStatus = resp?.status;
+    if (!resp || headStatus === 403 || headStatus === 405 || headStatus === 404) {
+        resp = await safeFetch(url, 'GET', { 'Range': 'bytes=0-2048' });
+        if (resp && resp.status >= 200 && resp.status < 400) return true;
+    }
+
+    return false;
 }
 
 function parseUrlList(raw) {
