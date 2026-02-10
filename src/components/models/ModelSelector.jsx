@@ -20,6 +20,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [verifying, setVerifying] = useState(false);
     const [providerType, setProviderType] = useState(null);
     const [filterText, setFilterText] = useState('');
 
