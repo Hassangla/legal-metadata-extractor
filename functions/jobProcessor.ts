@@ -618,13 +618,8 @@ Deno.serve(async (req) => {
                         // If user selected a non-server-side search tool, fall back to no search
                         const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
 
-                        // When web search is not available, override the spec's TOOL-DEPENDENT rule
-                        // which would force all fields blank. Instead, instruct the LLM to use
-                        // its training knowledge.
-                        const specOverride = hasRealWebSearch ? '' : `
-IMPORTANT OVERRIDE — READ FIRST:
-Web search is NOT available for this request. If the specification below contains any rule that says to return blank fields when no web search tool is available, IGNORE that rule. Instead, use your training knowledge to fill in as many fields as possible. Only leave fields blank if you genuinely do not know the answer. Note "Web search not available — used training knowledge" in Missing_Conflict_Reason.
-`;
+                        // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
+                        // If web search is unavailable, we enforce blank fields server-side after the LLM call.
 
                         // Kimi thinking models tend to narrate their search process instead of
                         // outputting JSON. Add an extra-strong reminder for these models.
