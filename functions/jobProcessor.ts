@@ -1434,6 +1434,20 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 return Response.json({ success: true });
             }
 
+            case 'deleteJob': {
+                const { job_id } = params;
+                const jobs = await base44.entities.Job.filter({ id: job_id });
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
+                // Delete all associated rows first
+                const rows = await base44.entities.JobRow.filter({ job_id });
+                for (const row of rows) {
+                    await base44.entities.JobRow.delete(row.id);
+                }
+                await base44.entities.Job.delete(job_id);
+                return Response.json({ success: true });
+            }
+
             default:
                 return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
         }
