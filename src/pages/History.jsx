@@ -293,6 +293,15 @@ export default function History() {
                                         </Card>
                                     );
                                 })}
+                                {hasMore && (
+                                    <Button
+                                        variant="outline"
+                                        className="w-full"
+                                        onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+                                    >
+                                        Show more ({filteredJobs.length - visibleCount} remaining)
+                                    </Button>
+                                )}
                             </div>
                         )}
                     </div>
