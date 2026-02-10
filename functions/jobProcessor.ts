@@ -383,6 +383,71 @@ function extractJSON(content) {
     return null;
 }
 
+// ── TOOL URL EXTRACTION (provenance proof from provider response) ──
+
+function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
+    const urls = [];
+    // OpenAI Responses API: annotations on output_text parts
+    if (isResponsesApi) {
+        if (Array.isArray(data?.output)) {
+            for (const item of data.output) {
+                if (item.type === 'message' && Array.isArray(item.content)) {
+                    for (const part of item.content) {
+                        if (part.annotations && Array.isArray(part.annotations)) {
+                            for (const ann of part.annotations) {
+                                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return [...new Set(urls)];
+    }
+    // Anthropic: web_search_tool_result blocks
+    if (providerType === 'anthropic') {
+        for (const block of (data?.content || [])) {
+            if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+                for (const item of block.content) { if (item.url) urls.push(item.url); }
+            }
+        }
+        return [...new Set(urls)];
+    }
+    // Google: groundingMetadata.groundingChunks
+    if (providerType === 'google') {
+        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        for (const chunk of chunks) { if (chunk.web?.uri) urls.push(chunk.web.uri); }
+        return [...new Set(urls)];
+    }
+    // Perplexity: top-level citations array
+    if (providerType === 'perplexity') {
+        const citations = data?.citations || [];
+        for (const c of citations) { if (typeof c === 'string' && c.startsWith('http')) urls.push(c); }
+        return [...new Set(urls)];
+    }
+    // OpenAI Chat Completions web_search_preview: content may be array with url_citation annotations
+    const msg = data?.choices?.[0]?.message;
+    if (msg && Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+            if (part.annotations && Array.isArray(part.annotations)) {
+                for (const ann of part.annotations) {
+                    if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                }
+            }
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
+    if (!content && !data) return false;
+    const text = (content || '').toLowerCase();
+    if (text.includes('no web search tool') || text.includes('web search is not available') ||
+        text.includes('i don\'t have access to web search') || text.includes('cannot perform web search')) return true;
+    if (isResponsesApi && data?.status === 'failed') return true;
+    return false;
+}
+
 // ── URL VERIFICATION HELPER ──────────────────────────────────
 
 async function verifyUrlLoads(url) {
@@ -435,7 +500,11 @@ async function finalizeAndVerify(ev, ctx) {
             ev[f] = '';
         }
         ev.Final_Flag = 'No sources';
-        addReason('Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.');
+        if (ctx.searchWasRequested && !ctx.hasRealWebSearch) {
+            addReason('Web search requested but no tool URLs were returned; treated as No sources.');
+        } else {
+            addReason('Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.');
+        }
     }
 
     // ── (D) Tier 5 restrictions ──
@@ -451,6 +520,21 @@ async function finalizeAndVerify(ev, ctx) {
         }
         ev.Final_Flag = 'Tier 5';
         addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
+    }
+
+    // ── (A0) TOOL URL PROVENANCE enforcement ──
+    // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls)
+    // to prove it came from real search results, not model hallucination.
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL && ctx.toolUrls && ctx.toolUrls.length > 0) {
+        const normalizedFinal = ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase();
+        const inToolUrls = ctx.toolUrls.some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
+        if (!inToolUrls) {
+            addReason(
+                `URL not found in tool-returned URL set; blanked server-side. ` +
+                `Final_Instrument_URL "${ev.Final_Instrument_URL}" was not in the ${ctx.toolUrls.length} URLs returned by the search tool.`
+            );
+            ev.Final_Instrument_URL = '';
+        }
     }
 
     // ── (A) URL CLOSED SET enforcement ──
@@ -1109,18 +1193,15 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
-                        
-                        // Tool failure detection: if Responses API returned text indicating
-                        // web search was unavailable, treat as no-sources (fail-closed)
-                        if (isResponsesApi && hasRealWebSearch && content) {
-                            const lower = content.toLowerCase();
-                            if (lower.includes('no web search tool') ||
-                                lower.includes('web search is not available') ||
-                                lower.includes('i don\'t have access to web search') ||
-                                lower.includes('cannot perform web search')) {
-                                // Override: treat as no-search run
-                                hasRealWebSearch = false;
-                            }
+
+                        // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
+                        const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
+                        const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
+                        const searchWasRequested = hasRealWebSearch; // remember original intent
+
+                        // Downgrade hasRealWebSearch if tool silently failed or returned no URLs
+                        if (hasRealWebSearch && (toolError || toolUrls.length === 0)) {
+                            hasRealWebSearch = false;
                         }
 
                         let parsed = extractJSON(content);
@@ -1232,6 +1313,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
                         const ev = await finalizeAndVerify(parsed.evidence, {
                             hasRealWebSearch,
+                            searchWasRequested,
+                            toolUrls,
                             row_index: row.row_index,
                             economy: input.Economy,
                             economyCode,
