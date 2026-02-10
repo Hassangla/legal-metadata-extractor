@@ -1072,36 +1072,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             };
                         }
 
-                        const ev = parsed.evidence;
-
-                        // ── SERVER-SIDE TOOL-DEPENDENT ENFORCEMENT ──
-                        // When web search was not available, blank out all tool-dependent
-                        // Final_* fields and set Final_Flag = "No sources".
-                        if (!hasRealWebSearch) {
-                            const toolDependentFinals = [
-                                'Final_Instrument_URL', 'Final_Enactment_Date',
-                                'Final_Date_of_Entry_in_Force', 'Final_Repeal_Year',
-                                'Final_Current_Status', 'Final_Public',
-                            ];
-                            for (const f of toolDependentFinals) {
-                                ev[f] = '';
-                            }
-                            ev.Final_Flag = 'No sources';
-                            const prev = ev.Missing_Conflict_Reason || '';
-                            const note = 'Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.';
-                            ev.Missing_Conflict_Reason = prev ? `${prev}; ${note}` : note;
-                        }
-
-                        // Inject server-side canonical values
-                        ev.Row_Index = row.row_index;
-                        ev.Economy = input.Economy;
-                        ev.Economy_Code = economyCode;
-                        ev.Legal_basis_verbatim = legalBasis;
-
-                        if (!economyCode) {
-                            const prev = ev.Missing_Conflict_Reason || '';
-                            ev.Missing_Conflict_Reason = [prev, 'Economy code not found in lookup table'].filter(Boolean).join('; ');
-                        }
+                        // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
+                        const ev = await finalizeAndVerify(parsed.evidence, {
+                            hasRealWebSearch,
+                            row_index: row.row_index,
+                            economy: input.Economy,
+                            economyCode,
+                            legalBasis,
+                        });
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
                         const outputJson = {
