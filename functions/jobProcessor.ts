@@ -1278,6 +1278,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             Flag: ev.Final_Flag || '',
                         };
 
+                        // Store tool_url_set in evidence for provenance auditing
+                        if (toolUrlSet.length > 0) {
+                            ev.tool_url_set = toolUrlSet;
+                        }
+
                         await base44.entities.JobRow.update(row.id, {
                             status: 'done',
                             output_json: outputJson,
