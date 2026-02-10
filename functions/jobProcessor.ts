@@ -7,8 +7,8 @@ const RETRY_BASE_MS = 2000;
 // ── PROVIDER CHAT CONFIGS ───────────────────────────────────
 
 const CHAT_CONFIGS = {
-    openai:           { chatUrl: (b) => `${b}/v1/chat/completions`, authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    openrouter:       { chatUrl: (b) => `${b}/v1/chat/completions`, authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    openai:           { chatUrl: (b) => `${b}/v1/chat/completions`, responsesUrl: (b) => `${b}/v1/responses`, authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    openrouter:       { chatUrl: (b) => `${b}/v1/chat/completions`, responsesUrl: (b) => `${b}/v1/responses`, authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
     groq:             { chatUrl: (b) => `${b}/openai/v1/chat/completions`,   authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
     together:         { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
     mistral:          { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
@@ -90,6 +90,56 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
     }
 
     // OpenAI / OpenAI-compatible (default)
+
+    if (webSearchChoice === 'web_search_preview') {
+        const id = (modelId || '').toLowerCase();
+
+        // Path A: Dedicated search models → Chat Completions + web_search_options
+        // These models are specifically trained for search and use Chat Completions.
+        const isSearchModel = id.includes('search-preview') || id.includes('search-api');
+
+        if (isSearchModel) {
+            const body = {
+                model: modelId,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                web_search_options: {},
+                max_tokens: 4096,
+                temperature: 0,
+            };
+            return {
+                url: cfg.chatUrl(baseUrl, modelId),
+                init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
+                isResponsesApi: false,
+            };
+        }
+
+        // Path B: All other models → Responses API + web_search tool
+        // The Responses API allows any capable model to use web search as a tool.
+        if (cfg.responsesUrl) {
+            const body = {
+                model: modelId,
+                instructions: systemPrompt,
+                input: userPrompt,
+                tools: [{ type: 'web_search' }],
+                temperature: 0,
+                max_output_tokens: 4096,
+                store: false,  // Avoid storage issues with some API plans
+            };
+            return {
+                url: cfg.responsesUrl(baseUrl),
+                init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
+                isResponsesApi: true,
+            };
+        }
+
+        // Fallback: provider has no responsesUrl (shouldn't happen for openai/openrouter)
+        // Fall through to standard Chat Completions without search
+    }
+
+    // Standard Chat Completions path (no web search, Kimi search, Perplexity builtin, or fallback)
     const body = {
         model: modelId,
         messages: [
@@ -100,37 +150,46 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         temperature: 0,
     };
 
-    if (webSearchChoice === 'web_search_preview') {
-        // OpenAI web search via Chat Completions: swap to dedicated search model
-        // and add web_search_options. The search model handles search server-side.
-        // Map the user's model to the best available search model.
-        const id = (modelId || '').toLowerCase();
-        if (id.includes('gpt-4o-mini') || id.includes('gpt-4.1-mini') || id.includes('gpt-4.1-nano')) {
-            body.model = 'gpt-4o-mini-search-preview';
-        } else {
-            body.model = 'gpt-4o-search-preview';
-        }
-        body.web_search_options = {};
-        // Do NOT set response_format when web search is active (conflicts with search annotations)
-    } else if (webSearchChoice === 'kimi_web_search') {
-        // Kimi server-side web search uses builtin_function tool
+    // Kimi server-side web search uses builtin_function tool in Chat Completions
+    if (webSearchChoice === 'kimi_web_search') {
         body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
-        // No response_format when tools are active
     } else if (webSearchChoice === 'none' || !webSearchChoice) {
         // No web search — safe to use response_format for reliable JSON
         body.response_format = { type: 'json_object' };
     }
-    // Note: 'builtin' (Perplexity) needs no tools array and no web_search_options — search is automatic.
+    // Note: 'builtin' (Perplexity) needs no tools array — search is automatic.
 
     return {
         url: cfg.chatUrl(baseUrl, modelId),
         init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
+        isResponsesApi: false,
     };
 }
 
 // ── PARSE LLM RESPONSE ─────────────────────────────────────
 
-function extractTextContent(providerType, data) {
+function extractTextContent(providerType, data, isResponsesApi) {
+    // OpenAI Responses API format: output is an array of items
+    if (isResponsesApi) {
+        const output = data.output;
+        if (Array.isArray(output)) {
+            const textParts = [];
+            for (const item of output) {
+                if (item.type === 'message' && Array.isArray(item.content)) {
+                    for (const part of item.content) {
+                        if ((part.type === 'output_text' || part.type === 'text') && part.text) {
+                            textParts.push(part.text);
+                        }
+                    }
+                }
+            }
+            if (textParts.length > 0) return textParts.join('\n');
+        }
+        // Fallback: check if there's a top-level output_text
+        if (data.output_text) return data.output_text;
+        return '';
+    }
+
     const cfg = CHAT_CONFIGS[providerType] || CHAT_CONFIGS.openai_compatible;
 
     if (cfg.chatFormat === 'anthropic') {
@@ -598,7 +657,7 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
   }
 }`;
 
-                        const { url, init } = buildLLMRequest(
+                        const { url, init, isResponsesApi } = buildLLMRequest(
                             providerType, job.model_id, systemPrompt, userPrompt,
                             effectiveWebSearch, conn.base_url, apiKey
                         );
@@ -668,6 +727,11 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                             const resp = await fetchWithRetry(url, init);
                             data = await resp.json();
 
+                            // Responses API may return 200 with status != 'completed'
+                            if (isResponsesApi && data.status === 'failed') {
+                                throw new Error(`Responses API failed: ${JSON.stringify(data.error || data.incomplete_details || 'unknown').slice(0, 300)}`);
+                            }
+
                             if (data.usage) {
                                 inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
                                 outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
@@ -675,9 +739,14 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                 inputTokens = data.usageMetadata.promptTokenCount || 0;
                                 outputTokens = data.usageMetadata.candidatesTokenCount || 0;
                             }
+                            // Responses API may report tokens differently
+                            if (isResponsesApi && inputTokens === 0 && data.usage) {
+                                inputTokens = data.usage.input_tokens || 0;
+                                outputTokens = data.usage.output_tokens || 0;
+                            }
                         }
 
-                        const content = extractTextContent(providerType, data);
+                        const content = extractTextContent(providerType, data, isResponsesApi);
                         let parsed = extractJSON(content);
 
                         // Tag extraction status
@@ -690,6 +759,20 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                             const rawContent = data.choices?.[0]?.message?.content;
                             const finishReason = data.choices?.[0]?.finish_reason || '';
                             let diagInfo = `Failed to parse LLM response. [web_search=${effectiveWebSearch}, requested=${job.web_search_choice}]`;
+                            if (isResponsesApi) {
+                                const outputTypes = Array.isArray(data.output) ? data.output.map(i => i.type).join(', ') : 'none';
+                                diagInfo += ` [responses_api, output_types=${outputTypes}]`;
+                                // Log the actual error if the Responses API returned one
+                                if (data.error) {
+                                    diagInfo += ` [api_error: ${JSON.stringify(data.error).slice(0, 200)}]`;
+                                }
+                                if (data.status && data.status !== 'completed') {
+                                    diagInfo += ` [status=${data.status}]`;
+                                }
+                                if (data.incomplete_details) {
+                                    diagInfo += ` [incomplete: ${JSON.stringify(data.incomplete_details).slice(0, 200)}]`;
+                                }
+                            }
                             if (hasToolCalls && !rawContent) {
                                 diagInfo += ' [model returned tool_calls with null content — likely wrong web search tool format for this provider]';
                             } else if (!content) {
