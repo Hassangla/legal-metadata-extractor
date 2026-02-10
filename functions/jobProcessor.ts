@@ -789,10 +789,18 @@ Deno.serve(async (req) => {
                             ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
-                        // Determine if we have REAL server-side web search
-                        const hasRealWebSearch = job.web_search_choice
+                        // Determine if we have REAL server-side web search.
+                        // For OpenAI, additionally gate on the web search model allowlist.
+                        let hasRealWebSearch = job.web_search_choice
                             && job.web_search_choice !== 'none'
                             && SERVER_SIDE_SEARCH.has(job.web_search_choice);
+
+                        // OpenAI-specific: only allowlisted models can actually use web search
+                        if (hasRealWebSearch && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
+                            if (!isOpenAIWebSearchModel(job.model_id)) {
+                                hasRealWebSearch = false;
+                            }
+                        }
 
                         // If user selected a non-server-side search tool, fall back to no search
                         const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
