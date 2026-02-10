@@ -15,19 +15,6 @@ const PROVIDERS = {
         webSearchTool: 'web_search_preview',
         note: 'May be blocked by Cloudflare when called from cloud servers.',
     },
-    openrouter: {
-        label: 'Legacy (Removed)',
-        icon: '🚫',
-        modelsUrl:  (base) => `${base}/v1/models`,
-        chatUrl:    (base) => `${base}/v1/chat/completions`,
-        authHeaders:(key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
-        parseModels:(data) => (data.data || []).map((m) => ({ id: m.id, name: m.name || m.id })),
-        chatFormat: 'openai',
-        cloudflareRisk: false,
-        webSearchTool: null,
-        note: 'OpenRouter has been removed. Please use OpenAI direct or another supported provider.',
-        removed: true,
-    },
     anthropic: {
         label: 'Anthropic',
         icon: '🅰️',
@@ -146,7 +133,6 @@ function detectProvider(baseUrl, apiKey) {
     const url = (baseUrl || '').toLowerCase().replace(/\/+$/, '');
     const key = (apiKey || '');
 
-    if (url.includes('openrouter.ai'))                          return 'openrouter';
     if (url.includes('anthropic.com') || key.startsWith('sk-ant-')) return 'anthropic';
     if (url.includes('openai.azure.com'))                       return 'azure_openai';
     if (url.includes('api.groq.com') || url.includes('groq.com')) return 'groq';
@@ -222,7 +208,7 @@ async function safeFetch(url, options, providerKey) {
             throw new Error(
                 `CLOUDFLARE_BLOCKED: ${prov.label}'s servers returned a Cloudflare bot challenge (HTTP ${resp.status}). ` +
                 `This happens when calling ${prov.label} from cloud infrastructure. ` +
-                `Recommended fix: use OpenRouter (https://openrouter.ai/api) which proxies to ${prov.label} models without Cloudflare blocks.`
+                `Run from a non-blocked network or use another supported provider.`
             );
         }
         throw new Error(`API returned ${resp.status}: ${body.slice(0, 500)}`);
@@ -284,11 +270,6 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
                 return { supports: true, options: ['web_search_preview'] };
             }
         }
-        return { supports: false, options: [] };
-    }
-
-    // OpenRouter: removed — always return no web search
-    if (providerKey === 'openrouter') {
         return { supports: false, options: [] };
     }
 
@@ -375,7 +356,7 @@ function lookupStaticPricing(modelId) {
     return null;
 }
 
-// OpenRouter pricing fetch removed — using static pricing table only
+// Using static pricing table only
 
 // ── MAIN HANDLER ────────────────────────────────────────────
 
@@ -414,9 +395,6 @@ Deno.serve(async (req) => {
                 const cleanUrl = base_url.replace(/\/+$/, '');
                 const providerKey = detectProvider(cleanUrl, api_key);
                 
-                if (providerKey === 'openrouter') {
-                    return Response.json({ success: false, error: 'OpenRouter is no longer supported. Please use OpenAI direct or another provider.', provider_type: 'openrouter', label: 'Legacy (Removed)' });
-                }
                 const prov = PROVIDERS[providerKey];
 
                 if (providerKey === 'perplexity') {
@@ -484,9 +462,6 @@ Deno.serve(async (req) => {
                 const cleanUrl = base_url.replace(/\/+$/, '');
                 const providerKey = detectProvider(cleanUrl, api_key);
                 
-                if (providerKey === 'openrouter') {
-                    return Response.json({ error: 'OpenRouter is no longer supported. Please use OpenAI direct or another provider.' }, { status: 400 });
-                }
                 const encrypted = await encryptString(api_key);
 
                 const connection = await base44.entities.APIConnection.create({

@@ -7,12 +7,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Plus, Trash2, RefreshCw, Check, Loader2, Server, Globe, AlertTriangle, Shield, Copy } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Check, Loader2, Server, Globe, AlertTriangle, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PROVIDER_COLORS = {
     openai:           { bg: 'bg-emerald-100', text: 'text-emerald-800' },
-    openrouter:       { bg: 'bg-slate-100',   text: 'text-slate-500' },
     anthropic:        { bg: 'bg-orange-100',  text: 'text-orange-800' },
     azure_openai:     { bg: 'bg-blue-100',    text: 'text-blue-800' },
     groq:             { bg: 'bg-yellow-100',  text: 'text-yellow-800' },
@@ -24,7 +23,7 @@ const PROVIDER_COLORS = {
 };
 
 const PROVIDER_LABELS = {
-    openai: 'OpenAI', openrouter: 'Legacy (Removed)', anthropic: 'Anthropic',
+    openai: 'OpenAI', anthropic: 'Anthropic',
     azure_openai: 'Azure OpenAI', groq: 'Groq', together: 'Together AI',
     mistral: 'Mistral', perplexity: 'Perplexity', google: 'Google AI',
     openai_compatible: 'OpenAI-Compatible',
@@ -49,19 +48,6 @@ export default function ConnectionManager({ onSelect, selectedId }) {
     const [newConn, setNewConn] = useState({ name: '', base_url: '', api_key: '' });
     const [detectedProvider, setDetectedProvider] = useState(null);
     const [testResult, setTestResult] = useState(null);
-    const [duplicating, setDuplicating] = useState(null);
-
-    const handleDuplicateAsOpenAI = async (conn) => {
-        setDuplicating(conn.id);
-        setNewConn({
-            name: conn.name.replace(/openrouter/i, 'OpenAI').replace(/\s*\(.*?\)\s*$/, '') + ' (OpenAI)',
-            base_url: 'https://api.openai.com',
-            api_key: '',
-        });
-        setShowCreate(true);
-        setDuplicating(null);
-    };
-
     useEffect(() => { loadConnections(); }, []);
 
     const detectProvider = useCallback(async (url, key) => {
@@ -258,25 +244,21 @@ export default function ConnectionManager({ onSelect, selectedId }) {
             ) : (
                 <div className="grid gap-3">
                     {connections.map((conn) => {
-                        const isLegacy = conn.provider_type === 'openrouter';
                         const colors = PROVIDER_COLORS[conn.provider_type] || PROVIDER_COLORS.openai_compatible;
                         return (
                             <Card key={conn.id}
-                                className={`transition-all ${isLegacy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} ${selectedId === conn.id && !isLegacy ? 'ring-2 ring-slate-900 bg-slate-50' : 'hover:bg-slate-50'}`}
-                                onClick={() => { if (!isLegacy) onSelect?.(conn.id); }}>
+                                className={`transition-all cursor-pointer ${selectedId === conn.id ? 'ring-2 ring-slate-900 bg-slate-50' : 'hover:bg-slate-50'}`}
+                                onClick={() => { onSelect?.(conn.id); }}>
                                 <CardContent className="p-4">
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-3">
-                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${conn.is_valid && !isLegacy ? colors.bg : 'bg-slate-100'}`}>
-                                                <Globe className={`w-5 h-5 ${conn.is_valid && !isLegacy ? colors.text : 'text-slate-400'}`} />
+                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${conn.is_valid ? colors.bg : 'bg-slate-100'}`}>
+                                                <Globe className={`w-5 h-5 ${conn.is_valid ? colors.text : 'text-slate-400'}`} />
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
-                                                    <p className={`font-medium ${isLegacy ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{conn.name}</p>
+                                                    <p className="font-medium text-slate-900">{conn.name}</p>
                                                     <ProviderBadge providerType={conn.provider_type} small />
-                                                    {isLegacy && (
-                                                        <Badge className="bg-red-100 text-red-700 text-[10px]">Removed</Badge>
-                                                    )}
                                                 </div>
                                                 <p className="text-sm text-slate-500">
                                                     {conn.base_url}
@@ -292,27 +274,16 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {isLegacy ? (
-                                                <Button variant="outline" size="sm"
-                                                    onClick={(e) => { e.stopPropagation(); handleDuplicateAsOpenAI(conn); }}
-                                                    disabled={duplicating === conn.id}
-                                                    className="gap-1.5 text-xs">
-                                                    <Copy className="w-3.5 h-3.5" /> Duplicate as OpenAI
-                                                </Button>
+                                            {conn.is_valid ? (
+                                                <Badge className="bg-green-100 text-green-800">Valid</Badge>
                                             ) : (
-                                                <>
-                                                    {conn.is_valid ? (
-                                                        <Badge className="bg-green-100 text-green-800">Valid</Badge>
-                                                    ) : (
-                                                        <Badge variant="secondary">Untested</Badge>
-                                                    )}
-                                                    <Button variant="ghost" size="icon"
-                                                        onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
-                                                        disabled={testing === conn.id}>
-                                                        {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                                    </Button>
-                                                </>
+                                                <Badge variant="secondary">Untested</Badge>
                                             )}
+                                            <Button variant="ghost" size="icon"
+                                                onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
+                                                disabled={testing === conn.id}>
+                                                {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                            </Button>
                                             <Button variant="ghost" size="icon"
                                                 onClick={(e) => { e.stopPropagation(); handleDelete(conn.id); }}
                                                 className="text-red-500 hover:text-red-600 hover:bg-red-50">
