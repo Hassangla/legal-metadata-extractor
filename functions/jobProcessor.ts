@@ -1246,6 +1246,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             economy: input.Economy,
                             economyCode,
                             legalBasis,
+                            toolUrlSet,
                         });
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
