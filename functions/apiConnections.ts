@@ -591,7 +591,25 @@ Deno.serve(async (req) => {
                 }
                 const { connection_id } = params;
                 const models = await base44.entities.ModelCatalog.filter({ connection_id });
-                for (const m of models) await base44.entities.ModelCatalog.delete(m.id);
+                
+                // Delete models in small batches with delays to avoid rate limits
+                for (let i = 0; i < models.length; i++) {
+                    for (let attempt = 0; attempt < 3; attempt++) {
+                        try {
+                            await base44.entities.ModelCatalog.delete(models[i].id);
+                            break;
+                        } catch (e) {
+                            if (e.message?.includes('429') || e.message?.includes('Rate limit')) {
+                                await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+                            } else {
+                                throw e;
+                            }
+                        }
+                    }
+                    // Throttle: pause every 5 deletes
+                    if ((i + 1) % 5 === 0) await new Promise(r => setTimeout(r, 1000));
+                }
+                
                 await base44.entities.APIConnection.delete(connection_id);
                 return Response.json({ success: true });
             }
