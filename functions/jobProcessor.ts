@@ -960,6 +960,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
                         if (isKimiSearch) {
+                          try {
                             const bodyObj = JSON.parse(init.body);
                             const MAX_TOOL_LOOPS = 10;
 
@@ -978,42 +979,52 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                                 const choice = data.choices?.[0];
                                 if (!choice) break;
-                                if (choice.finish_reason === 'stop') break;
 
-                                // finish_reason=length means output was truncated.
-                                // Break and let the follow-up handler deal with it.
-                                if (choice.finish_reason === 'length') break;
+                                const msg = choice.message || {};
 
-                                // If model returned content that contains JSON, use it
-                                if (choice.message?.content &&
-                                    typeof choice.message.content === 'string' &&
-                                    choice.message.content.length > 20 &&
-                                    choice.message.content.includes('"evidence"')) {
-                                    break;
-                                }
+                                // Detect tool calls: structured OR embedded-in-text tokens
+                                const structuredToolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+                                const textContent = (typeof msg.content === 'string' ? msg.content : '') ||
+                                    (typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '');
+                                const textToolCalls = parseKimiToolCallsFromText(textContent);
+                                const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
+                                const hasToolCalls = toolCalls.length > 0;
 
-                                // Kimi echo protocol: append assistant tool_calls, then
-                                // echo each tool's arguments back as the tool result.
-                                if (choice.finish_reason === 'tool_calls' && choice.message?.tool_calls?.length > 0) {
+                                // If we have tool calls (regardless of finish_reason), echo them
+                                if (hasToolCalls && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop')) {
                                     const assistantMsg = {
                                         role: 'assistant',
-                                        content: choice.message.content || null,
-                                        tool_calls: choice.message.tool_calls,
+                                        content: msg.content ?? null,
+                                        tool_calls: toolCalls,
                                     };
-                                    // Kimi K2.5 thinking models require reasoning_content in assistant tool call messages
-                                    if (choice.message.reasoning_content !== undefined) {
-                                        assistantMsg.reasoning_content = choice.message.reasoning_content;
+                                    if (msg.reasoning_content !== undefined) {
+                                        assistantMsg.reasoning_content = msg.reasoning_content;
                                     }
                                     bodyObj.messages.push(assistantMsg);
 
-                                    for (const tc of choice.message.tool_calls) {
+                                    for (const tc of toolCalls) {
                                         bodyObj.messages.push({
                                             role: 'tool',
                                             tool_call_id: tc.id,
+                                            name: tc.function?.name || '$web_search',
                                             content: tc.function?.arguments || JSON.stringify({ status: 'ok' }),
                                         });
                                     }
                                     continue;
+                                }
+
+                                // finish_reason=stop with no tool calls → final response
+                                if (choice.finish_reason === 'stop') break;
+
+                                // finish_reason=length means output was truncated.
+                                if (choice.finish_reason === 'length') break;
+
+                                // If model returned content that contains JSON, use it
+                                if (msg.content &&
+                                    typeof msg.content === 'string' &&
+                                    msg.content.length > 20 &&
+                                    msg.content.includes('"evidence"')) {
+                                    break;
                                 }
 
                                 break;
@@ -1033,8 +1044,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     role: 'user',
                                     content: 'You provided a narrative description instead of JSON. Now convert ALL of your findings into the exact JSON structure I requested. Return ONLY the JSON object starting with { and ending with }. No explanation, no markdown, no code fences.',
                                 });
-                                // Remove tools to prevent another search loop
+                                // Remove tools AND tool_choice to prevent re-entering tool calling
                                 delete bodyObj.tools;
+                                delete bodyObj.tool_choice;
 
                                 const followupResp = await fetchWithRetry(url, {
                                     method: 'POST',
@@ -1047,6 +1059,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0;
                                 }
                             }
+                          } catch (kimiErr) {
+                            // Provider failure → produce diagnostic row instead of hard error
+                            data = { error: { message: kimiErr.message || String(kimiErr) } };
+                          }
                         } else {
                             // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
                             const resp = await fetchWithRetry(url, init);
