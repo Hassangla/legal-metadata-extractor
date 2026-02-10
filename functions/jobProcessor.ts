@@ -870,28 +870,44 @@ ${specText}`;
                         // Build user prompt — conditional on whether real web search is available
                         let searchInstructions;
                         if (hasRealWebSearch) {
-                            searchInstructions = `SEARCH QUERIES (use the web search tool to research; adapt to local language if non-English economy):
-1. ${query1}
-2. ${query2}
-3. ${query3}
+                            searchInstructions = `SEARCH QUERIES — use the web search tool to research:
+
+MANDATORY MULTILINGUAL SEARCH PROTOCOL:
+- Query_1 MUST be in English: ${query1}
+- At least ONE of Query_2 or Query_3 MUST be rewritten and executed in the official/original language/script of the economy or instrument, translating legal terms and using the local instrument title if known.
+- Default English versions (rewrite at least one in local language):
+  Query_2: ${query2}
+  Query_3: ${query3}
+
+Examples of required multilingual queries:
+- Syria nationality law → Arabic: "قانون الجنسية السوري" "المرسوم التشريعي رقم 276 لعام 1969"
+- Slovenia Agricultural Land Act → Slovenian: "Zakon o kmetijskih zemljiščih"
+- Japan Companies Act → Japanese: "会社法"
+Record the actual multilingual query string you used in the Query_2 or Query_3 evidence field.
 
 INSTRUCTIONS:
-1. Search using the queries above. Stop early only if Tier 1-2 sources clearly answer the needed fields.
+1. Search using the queries above (English + at least one local-language query). Stop early only if Tier 1-2 sources clearly answer the needed fields.
 2. Identify the best source (prefer Tier 1 official government, then Tier 2 legal databases, then Tier 3, etc.).
 3. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
-4. Determine Language_Doc (language of official publication), Enactment_Date, Date_of_Entry_in_Force, Current_Status.
-5. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
+4. Determine Final_Language_Doc (language of official publication), Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status.
+5. For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
 6. Record all evidence, URLs considered, tier, and reasoning.`;
                         } else {
                             searchInstructions = `NOTE: Web search is NOT available for this request. Do NOT attempt to call any search tool.
 
-Because web search is unavailable, the TOOL-DEPENDENT fields cannot be verified. Leave the following fields as empty strings: Instrument_URL, Enactment_Date, Date_of_Entry_in_Force, Repeal_Year, Current_Status, Public.
-Set Flag to "No sources".
-In Missing_Conflict_Reason, note: "Web search tool not available — TOOL-DEPENDENT fields left blank per spec."
+Because web search is unavailable, the TOOL-DEPENDENT fields cannot be verified. You MUST leave the following Final_* fields as empty strings:
+- Final_Instrument_URL
+- Final_Enactment_Date
+- Final_Date_of_Entry_in_Force
+- Final_Repeal_Year
+- Final_Current_Status
+- Final_Public
+Set Final_Flag to "No sources".
+In Missing_Conflict_Reason, write: "Web search tool not available — TOOL-DEPENDENT fields left blank per spec."
 
-You may still attempt to extract Language_Doc, Instrument_Full_Name_Original_Language, and Instrument_Published_Name if you are confident from the input data alone.
+You may still attempt to extract Final_Language_Doc, Final_Instrument_Full_Name_Original_Language, and Final_Instrument_Published_Name if you are confident from the input data alone.
 
-REFERENCE QUERIES (for context only):
+REFERENCE QUERIES (for context only — do NOT execute them):
 1. ${query1}
 2. ${query2}
 3. ${query3}`;
@@ -1109,27 +1125,47 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let parsed = extractJSON(content);
 
-                        // Normalize: if model returned old {output, evidence} format, migrate
-                        // to new evidence-only format by merging output Final_* fields.
-                        if (parsed && parsed.output && !parsed.evidence?.Final_Flag) {
-                            const o = parsed.output;
-                            const e = parsed.evidence || {};
-                            e.Final_Language_Doc = e.Final_Language_Doc || o.Language_Doc || '';
-                            e.Final_Instrument_Full_Name_Original_Language = e.Final_Instrument_Full_Name_Original_Language || o.Instrument_Full_Name_Original_Language || '';
-                            e.Final_Instrument_Published_Name = e.Final_Instrument_Published_Name || o.Instrument_Published_Name || '';
-                            e.Final_Instrument_URL = e.Final_Instrument_URL || o.Instrument_URL || '';
-                            e.Final_Enactment_Date = e.Final_Enactment_Date || o.Enactment_Date || '';
-                            e.Final_Date_of_Entry_in_Force = e.Final_Date_of_Entry_in_Force || o.Date_of_Entry_in_Force || '';
-                            e.Final_Repeal_Year = e.Final_Repeal_Year || o.Repeal_Year || '';
-                            e.Final_Current_Status = e.Final_Current_Status || o.Current_Status || '';
-                            e.Final_Public = e.Final_Public || o.Public || '';
-                            e.Final_Flag = e.Final_Flag || o.Flag || '';
-                            parsed = { evidence: e };
-                        }
+                        // ── NORMALIZE any model output format into { evidence: { ...all fields + Final_* } } ──
 
-                        // If model returned evidence at top level (new format), wrap it
-                        if (parsed && !parsed.evidence && parsed.Final_Flag !== undefined) {
-                            parsed = { evidence: parsed };
+                        if (parsed) {
+                            // Format 1: { "output": {...}, "evidence": {...} } — old spec-style
+                            if (parsed.output && !parsed.evidence?.Final_Flag) {
+                                const o = parsed.output;
+                                const e = parsed.evidence || {};
+                                e.Final_Language_Doc = e.Final_Language_Doc || o.Language_Doc || '';
+                                e.Final_Instrument_Full_Name_Original_Language = e.Final_Instrument_Full_Name_Original_Language || o.Instrument_Full_Name_Original_Language || '';
+                                e.Final_Instrument_Published_Name = e.Final_Instrument_Published_Name || o.Instrument_Published_Name || '';
+                                e.Final_Instrument_URL = e.Final_Instrument_URL || o.Instrument_URL || '';
+                                e.Final_Enactment_Date = e.Final_Enactment_Date || o.Enactment_Date || '';
+                                e.Final_Date_of_Entry_in_Force = e.Final_Date_of_Entry_in_Force || o.Date_of_Entry_in_Force || '';
+                                e.Final_Repeal_Year = e.Final_Repeal_Year || o.Repeal_Year || '';
+                                e.Final_Current_Status = e.Final_Current_Status || o.Current_Status || '';
+                                e.Final_Public = e.Final_Public || o.Public || '';
+                                e.Final_Flag = e.Final_Flag || o.Flag || '';
+                                parsed = { evidence: e };
+                            }
+
+                            // Format 2: { "Evidence": {...}, "Final": { Final_*... } } — Spec-style with separate Final block
+                            if (!parsed.evidence && (parsed.Evidence || parsed.Final || parsed.final)) {
+                                const e = parsed.Evidence || parsed.evidence || {};
+                                const f = parsed.Final || parsed.final || {};
+                                // Merge Final_* keys from the Final block into evidence
+                                for (const [k, v] of Object.entries(f)) {
+                                    const key = k.startsWith('Final_') ? k : `Final_${k}`;
+                                    if (!e[key]) e[key] = v;
+                                }
+                                parsed = { evidence: e };
+                            }
+
+                            // Format 3: evidence at top level (flat object with Final_Flag present)
+                            if (!parsed.evidence && parsed.Final_Flag !== undefined) {
+                                parsed = { evidence: parsed };
+                            }
+
+                            // Format 4: case-insensitive "evidence" key
+                            if (!parsed.evidence && parsed.Evidence) {
+                                parsed = { evidence: parsed.Evidence };
+                            }
                         }
 
                         if (!parsed || !parsed.evidence) {
