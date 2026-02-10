@@ -8,10 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2 } from 'lucide-react';
+import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
 
 import ConnectionManager from '@/components/connections/ConnectionManager';
+import ModelPricingPanel from '@/components/settings/ModelPricingPanel';
 
 const PAGE_SIZE = 30;
 
@@ -182,6 +183,12 @@ export default function Settings() {
                             <Globe className="w-4 h-4" />
                             Economy Codes
                         </TabsTrigger>
+                        {isAdmin && (
+                            <TabsTrigger value="pricing" className="gap-2">
+                                <DollarSign className="w-4 h-4" />
+                                Model Pricing
+                            </TabsTrigger>
+                        )}
                     </TabsList>
 
                     {isAdmin && (
@@ -364,6 +371,11 @@ export default function Settings() {
                             </CardContent>
                         </Card>
                     </TabsContent>
+                    {isAdmin && (
+                        <TabsContent value="pricing">
+                            <ModelPricingPanel />
+                        </TabsContent>
+                    )}
                 </Tabs>
             </div>
         </div>
