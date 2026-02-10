@@ -247,6 +247,41 @@ export default function History() {
                                                                 )}
                                                             </Button>
                                                         )}
+                                                        <AlertDialog>
+                                                            <AlertDialogTrigger asChild>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    disabled={deleting === job.id || job.status === 'running' || job.status === 'queued'}
+                                                                    title="Delete job"
+                                                                    className="text-slate-400 hover:text-red-600"
+                                                                >
+                                                                    {deleting === job.id ? (
+                                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                                    ) : (
+                                                                        <Trash2 className="w-4 h-4" />
+                                                                    )}
+                                                                </Button>
+                                                            </AlertDialogTrigger>
+                                                            <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                                                                <AlertDialogHeader>
+                                                                    <AlertDialogTitle>Delete this job?</AlertDialogTitle>
+                                                                    <AlertDialogDescription>
+                                                                        This will permanently delete the job and all its row data. This action cannot be undone.
+                                                                    </AlertDialogDescription>
+                                                                </AlertDialogHeader>
+                                                                <AlertDialogFooter>
+                                                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                                    <AlertDialogAction
+                                                                        onClick={() => handleDelete(job.id)}
+                                                                        className="bg-red-600 hover:bg-red-700"
+                                                                    >
+                                                                        Delete
+                                                                    </AlertDialogAction>
+                                                                </AlertDialogFooter>
+                                                            </AlertDialogContent>
+                                                        </AlertDialog>
                                                     </div>
                                                 </div>
                                             </CardContent>
