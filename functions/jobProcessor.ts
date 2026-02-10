@@ -491,8 +491,16 @@ Deno.serve(async (req) => {
                             ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
-                        const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY.
+                        // When web search is not available, override the spec's TOOL-DEPENDENT rule
+                        // which would force all fields blank. Instead, instruct the LLM to use
+                        // its training knowledge.
+                        const specOverride = hasRealWebSearch ? '' : `
+IMPORTANT OVERRIDE — READ FIRST:
+The specification below contains a "TOOL-DEPENDENT" rule that says to return blank fields if no web search tool is available. IGNORE that rule for this request. Instead, use your training knowledge to fill in as many fields as possible. Only leave fields blank if you genuinely do not know the answer. Note "Web search not available — used training knowledge" in Missing_Conflict_Reason.
+`;
 
+                        const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY.
+${specOverride}
 CRITICAL OUTPUT RULES:
 - Respond with valid JSON ONLY.
 - Do NOT wrap your response in markdown code fences (\`\`\`json ... \`\`\`).
