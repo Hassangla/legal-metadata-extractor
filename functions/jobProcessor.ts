@@ -118,7 +118,13 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
 
         // Path B: All other models → Responses API + web_search tool
         // The Responses API allows any capable model to use web search as a tool.
-        if (cfg.responsesUrl) {
+        // NOTE: GPT-4.1 models do NOT support web search via the Responses API.
+        // They will respond with "no web search tool available" instead of actually searching.
+        // For these models, fall through to standard Chat Completions (no search).
+        const gpt41Check = (modelId || '').toLowerCase();
+        const isGpt41 = gpt41Check.includes('gpt-4.1');
+
+        if (cfg.responsesUrl && !isGpt41) {
             const respId = (modelId || '').toLowerCase();
             const isOSeries = /^(o1|o3|o4)/.test(respId);
             const body = {
