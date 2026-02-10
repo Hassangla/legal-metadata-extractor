@@ -212,7 +212,7 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                     <AlertTriangle className="w-4 h-4 text-amber-600" />
                                     <AlertDescription className="text-sm text-amber-800">
                                         <strong>{detectedProvider.label}</strong> may block requests from cloud servers (Cloudflare bot protection).
-                                        If this fails, use <button onClick={() => applyPreset('openrouter')} className="underline font-medium">OpenRouter</button> instead — it proxies to {detectedProvider.label} models without Cloudflare blocks.
+                                        If this fails, consider using a different provider or network configuration.
                                     </AlertDescription>
                                 </Alert>
                             )}
@@ -221,7 +221,7 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                     <AlertTriangle className="w-4 h-4 text-red-600" />
                                     <AlertDescription className="text-sm text-red-800">
                                         {testResult.isCloudflare ? (
-                                            <><strong>Cloudflare blocked this request.</strong> The {testResult.provider} API rejected the server-side call. Use <button onClick={() => applyPreset('openrouter')} className="underline font-semibold">OpenRouter</button> as a proxy to access {testResult.provider} models.</>
+                                            <><strong>Cloudflare blocked this request.</strong> The {testResult.provider} API rejected the server-side call. Try a different provider or network configuration.</>
                                         ) : (
                                             <>Connection test failed: {testResult.error?.slice(0, 200)}</>
                                         )}
