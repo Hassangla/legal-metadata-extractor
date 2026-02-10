@@ -99,25 +99,21 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         temperature: 0,
     };
 
-    const useWebSearch = webSearchChoice && webSearchChoice !== 'none' && webSearchChoice !== 'builtin';
-
-    if (useWebSearch) {
-        // When using web search tools, do NOT set response_format (causes conflicts).
-        // JSON output is enforced via the prompt instructions instead.
-        if (webSearchChoice === 'web_search_preview') {
-            // OpenAI native web search — must use the built-in tool type
-            body.tools = [{ type: 'web_search_preview' }];
-        } else if (webSearchChoice === 'kimi_web_search') {
-            // Moonshot / Kimi — must use builtin_function with $web_search
-            body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
-        } else {
-            // DeepSeek, xAI, other openai_compatible providers — generic function tool
-            body.tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web for current legal information', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } } }];
-        }
-    } else {
+    // Only attach tools for server-side search providers.
+    // The caller (process action) already resolved effectiveWebSearch to 'none'
+    // for any non-server-side provider, so webSearchChoice here is either
+    // a real server-side tool name or 'none'.
+    if (webSearchChoice === 'web_search_preview') {
+        // OpenAI native web search — handled server-side, single call
+        body.tools = [{ type: 'web_search_preview' }];
+        // Do NOT set response_format when tools are active (causes conflicts)
+    } else if (webSearchChoice === 'none' || !webSearchChoice) {
         // No web search — safe to use response_format for reliable JSON
         body.response_format = { type: 'json_object' };
     }
+    // Note: 'builtin' (Perplexity) needs no tools array — search is automatic.
+    // Note: 'web_search' (Anthropic) and 'google_search' (Google) are handled
+    // in their own chatFormat branches above, not here.
 
     return {
         url: cfg.chatUrl(baseUrl, modelId),
