@@ -619,6 +619,15 @@ IMPORTANT OVERRIDE — READ FIRST:
 Web search is NOT available for this request. If the specification below contains any rule that says to return blank fields when no web search tool is available, IGNORE that rule. Instead, use your training knowledge to fill in as many fields as possible. Only leave fields blank if you genuinely do not know the answer. Note "Web search not available — used training knowledge" in Missing_Conflict_Reason.
 `;
 
+                        // Kimi thinking models tend to narrate their search process instead of
+                        // outputting JSON. Add an extra-strong reminder for these models.
+                        const isKimiThinking = (job.model_id || '').toLowerCase().includes('kimi') && 
+                            ((job.model_id || '').toLowerCase().includes('think') || (job.model_id || '').toLowerCase().includes('k2'));
+
+                        const jsonReminder = isKimiThinking
+                            ? `\nABSOLUTELY CRITICAL: After completing all web searches and research, your FINAL response MUST be a single JSON object. Do NOT describe your findings in natural language. Do NOT narrate your search process in your final answer. Your entire final response must be parseable as JSON. Start with { and end with }.`
+                            : '';
+
                         const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY.
 ${specOverride}
 CRITICAL OUTPUT RULES:
@@ -627,6 +636,7 @@ CRITICAL OUTPUT RULES:
 - Do NOT include any explanation, commentary, or text before or after the JSON.
 - The response must start with { and end with }.
 - If you cannot find information for a field, leave it as an empty string "".
+- Do NOT narrate or describe your search process in your response. Output ONLY the JSON object.${jsonReminder}
 
 ${specText}`;
 
