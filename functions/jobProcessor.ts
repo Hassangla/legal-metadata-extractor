@@ -706,6 +706,14 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
+                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
+                
+                // Block legacy OpenRouter connections
+                if (providerType === 'openrouter') {
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'OpenRouter connections are no longer supported. Please create a new job using OpenAI direct or another supported provider.' });
+                    return Response.json({ error: 'OpenRouter connections are no longer supported.' }, { status: 400 });
+                }
+                
                 let apiKey;
                 try {
                     apiKey = await decryptString(conn.api_key_encrypted);
@@ -714,7 +722,6 @@ Deno.serve(async (req) => {
                     await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
                     return Response.json({ error: msg }, { status: 500 });
                 }
-                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
 
                 const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
                 const specText = specVersions[0]?.spec_text || '';
