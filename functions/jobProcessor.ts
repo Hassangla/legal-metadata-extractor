@@ -202,6 +202,56 @@ function extractJSON(content) {
     return null;
 }
 
+// ── ECONOMY ALIASES ─────────────────────────────────────────
+// Common alternate names/spellings for economies
+const ECONOMY_ALIASES = {
+    'ivory coast': "Côte d'Ivoire",
+    'cote divoire': "Côte d'Ivoire",
+    'cote d ivoire': "Côte d'Ivoire",
+    'south korea': 'Korea, Rep.',
+    'republic of korea': 'Korea, Rep.',
+    'north korea': "Korea, Dem. People's Rep.",
+    'democratic republic of the congo': 'Congo, Dem. Rep.',
+    'drc': 'Congo, Dem. Rep.',
+    'republic of congo': 'Congo, Rep.',
+    'czech republic': 'Czechia',
+    'swaziland': 'Eswatini',
+    'burma': 'Myanmar',
+    'holland': 'Netherlands',
+    'usa': 'United States',
+    'united states of america': 'United States',
+    'uk': 'United Kingdom',
+    'great britain': 'United Kingdom',
+    'russia': 'Russian Federation',
+    'iran': 'Iran, Islamic Rep.',
+    'syria': 'Syrian Arab Republic',
+    'venezuela': 'Venezuela, RB',
+    'egypt': 'Egypt, Arab Rep.',
+    'yemen': 'Yemen, Rep.',
+    'laos': 'Lao PDR',
+    'slovakia': 'Slovak Republic',
+    'macedonia': 'North Macedonia',
+    'cape verde': 'Cabo Verde',
+    'east timor': 'Timor-Leste',
+    'gambia': 'Gambia, The',
+    'bahamas': 'Bahamas, The',
+    'taiwan': 'Taiwan, China',
+    'hong kong': 'Hong Kong SAR, China',
+    'macau': 'Macao SAR, China',
+    'macao': 'Macao SAR, China',
+    'palestine': 'West Bank and Gaza',
+    'brunei': 'Brunei Darussalam',
+    'micronesia': 'Micronesia, Fed. Sts.',
+    'vietnam': 'Viet Nam',
+    'kyrgyzstan': 'Kyrgyz Republic',
+    'st. lucia': 'St. Lucia',
+    'saint lucia': 'St. Lucia',
+    'st. kitts': 'St. Kitts and Nevis',
+    'saint kitts': 'St. Kitts and Nevis',
+    'st. vincent': 'St. Vincent and the Grenadines',
+    'saint vincent': 'St. Vincent and the Grenadines',
+};
+
 // ── MODEL PRICING (per million tokens) ──────────────────────
 const MODEL_PRICING = {
     // OpenAI
@@ -400,7 +450,9 @@ Deno.serve(async (req) => {
                     try {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data;
-                        const economyCode = economyMap[input.Economy?.toLowerCase()?.trim()] || '';
+                        const rawEconomy = input.Economy?.toLowerCase()?.trim() || '';
+                        const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
+                        const economyCode = economyMap[resolvedEconomy] || economyMap[rawEconomy] || '';
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
