@@ -74,10 +74,9 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     }, [job?.status, statusCounts?.pending]);
 
-    // FIX: Sequential batch processor — processes one batch, refreshes, then continues
+    // Sequential batch processor — processes one batch, refreshes, then continues
     const processNextBatch = async () => {
         try {
-            // FIX: action is 'process', NOT 'start' (backend only has 'process')
             const response = await base44.functions.invoke('jobProcessor', {
                 action: 'process',
                 job_id: jobIdRef.current
@@ -90,8 +89,12 @@ export default function JobProgress({ jobId, onComplete }) {
             if (result && 
                 result.counts.pending > 0 && 
                 (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
-                // Small delay to avoid hammering the server
-                await new Promise(r => setTimeout(r, 500));
+                // Adaptive delay: increase delay as job progresses to reduce rate limiting risk
+                const batchNumber = (result.jobData.progress_json?.current_batch || 1);
+                const baseDelay = 1000; // 1 second base
+                const maxDelay = 5000;  // 5 seconds max
+                const delay = Math.min(baseDelay + (batchNumber * 100), maxDelay);
+                await new Promise(r => setTimeout(r, delay));
                 // Continue processing if this is still the same job
                 if (processingRef.current) {
                     processNextBatch();
@@ -102,8 +105,18 @@ export default function JobProgress({ jobId, onComplete }) {
         } catch (error) {
             console.error('Batch processing error:', error);
             processingRef.current = false;
-            // Refresh status to show current state
-            await loadJobStatus();
+            
+            // If it looks like a rate limit error, wait longer then retry
+            const isRateLimit = error.message?.includes('429') || error.message?.includes('rate');
+            if (isRateLimit) {
+                toast.error('Rate limited — waiting 30 seconds before retrying...');
+                await new Promise(r => setTimeout(r, 30000));
+                processingRef.current = true;
+                processNextBatch();
+            } else {
+                // Refresh status to show current state
+                await loadJobStatus();
+            }
         }
     };
 
