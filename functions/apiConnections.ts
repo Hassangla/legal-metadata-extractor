@@ -297,12 +297,26 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: null, options: [] };
     }
 
-    // ── OpenAI-Compatible: only server-side search providers are supported ──
+    // ── OpenAI-Compatible: identify providers with real server-side search ──
     if (providerKey === 'openai_compatible') {
-        // None of the openai_compatible providers have true server-side web search.
-        // DeepSeek, xAI, Kimi/Moonshot, Cohere all use client-side tool calling,
-        // which requires the application to execute the search — not supported.
-        return { supports: false, options: [] };
+
+        // Moonshot / Kimi — uses server-side builtin_function $web_search.
+        // The echo-loop protocol: client echoes tool arguments back, server
+        // performs the actual web search behind the scenes.
+        if (url.includes('moonshot') || url.includes('kimi')) {
+            return { supports: true, options: ['kimi_web_search'] };
+        }
+
+        // DeepSeek, xAI, Cohere — these use client-side function-calling tools
+        // that require the application to execute the search. Not supported
+        // because we don't have a third-party search API integration.
+        // Return false explicitly so the UI shows "Not supported".
+        if (url.includes('deepseek') || url.includes('x.ai') || url.includes('xai.') || url.includes('cohere')) {
+            return { supports: false, options: [] };
+        }
+
+        // Generic openai_compatible — cannot determine
+        return { supports: null, options: [] };
     }
 
     // Groq, Together, Mistral, Azure — cannot reliably auto-detect
