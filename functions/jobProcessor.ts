@@ -824,17 +824,21 @@ Deno.serve(async (req) => {
                     console.error('Failed to load economy codes (non-fatal):', ecoErr.message);
                 }
 
-                // Look up stored model pricing from ModelCatalog
+                // Look up stored model pricing and search_mode from ModelCatalog
                 let modelInputPrice = 0;
                 let modelOutputPrice = 0;
+                let catalogSearchMode = 'none';
                 try {
                     const catalogEntries = await base44.entities.ModelCatalog.filter({
                         connection_id: job.connection_id,
                         model_id: job.model_id,
                     });
-                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
-                        modelInputPrice = catalogEntries[0].input_price_per_million;
-                        modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
+                    if (catalogEntries.length > 0) {
+                        if (catalogEntries[0].input_price_per_million > 0) {
+                            modelInputPrice = catalogEntries[0].input_price_per_million;
+                            modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
+                        }
+                        catalogSearchMode = catalogEntries[0].search_mode || 'none';
                     }
                 } catch (_) {}
 
