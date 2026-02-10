@@ -239,83 +239,66 @@ function googleFetchUrl(base, path, apiKey) {
     return url.toString();
 }
 
-// ── WEB SEARCH AUTO-DETECTION ───────────────────────────────
-// Tags models with web search support based on provider + model name + base URL.
-// The third parameter baseUrl lets us identify openai_compatible providers.
+// ── WEB SEARCH MODE DETECTION ───────────────────────────────
+// Returns the candidate search_mode and web_search_options for a model.
+// This is a heuristic guess — actual verification happens in 'verifyWebSearch'.
+// search_mode is always stored as "none" by default until verified.
 
-function detectWebSearch(providerKey, modelId, baseUrl) {
+function detectSearchModeCandidate(providerKey, modelId, baseUrl) {
     const id = (modelId || '').toLowerCase();
     const url = (baseUrl || '').toLowerCase();
 
-    // Perplexity: all models have built-in web search
     if (providerKey === 'perplexity') {
-        return { supports: true, options: ['builtin'] };
+        return { search_mode: 'provider_builtin', options: ['builtin'] };
+    }
+    if (providerKey === 'anthropic' && id.includes('claude')) {
+        return { search_mode: 'provider_builtin', options: ['web_search'] };
+    }
+    if (providerKey === 'google' && id.includes('gemini')) {
+        return { search_mode: 'provider_builtin', options: ['google_search'] };
     }
 
-    // Anthropic: Claude models support web_search tool
-    if (providerKey === 'anthropic') {
-        if (id.includes('claude')) {
-            return { supports: true, options: ['web_search'] };
-        }
-        return { supports: false, options: [] };
-    }
-
-    // Google: Gemini models support google_search tool
-    if (providerKey === 'google') {
-        if (id.includes('gemini')) {
-            return { supports: true, options: ['google_search'] };
-        }
-        return { supports: false, options: [] };
-    }
-
-    // OpenAI direct: strict allowlist for web search models
-    // Only models verified to work with Responses API web_search tool
     const OPENAI_WEBSEARCH_ALLOWLIST = new Set([
         'gpt-4o', 'gpt-4o-mini', 'gpt-4o-search-preview',
         'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
     ]);
     if (providerKey === 'openai') {
-        // Check exact match first, then prefix match
+        const isSearchModel = id.includes('search-preview') || id.includes('search-api');
+        if (isSearchModel) {
+            return { search_mode: 'chat_web_search_preview', options: ['web_search_preview'] };
+        }
         if (OPENAI_WEBSEARCH_ALLOWLIST.has(id)) {
-            return { supports: true, options: ['web_search_preview'] };
+            return { search_mode: 'responses_web_search', options: ['web_search_preview'] };
         }
         for (const allowed of OPENAI_WEBSEARCH_ALLOWLIST) {
             if (id.startsWith(allowed + '-')) {
-                return { supports: true, options: ['web_search_preview'] };
+                return { search_mode: 'responses_web_search', options: ['web_search_preview'] };
             }
         }
-        return { supports: false, options: [] };
+        return { search_mode: 'none', options: [] };
     }
 
-    // OpenRouter: removed — always return no web search
     if (providerKey === 'openrouter') {
-        return { supports: false, options: [] };
+        return { search_mode: 'none', options: [] };
     }
 
-    // ── OpenAI-Compatible: identify providers with real server-side search ──
     if (providerKey === 'openai_compatible') {
-
-        // Moonshot / Kimi — uses server-side builtin_function $web_search.
-        // The echo-loop protocol: client echoes tool arguments back, server
-        // performs the actual web search behind the scenes.
         if (url.includes('moonshot') || url.includes('kimi')) {
-            return { supports: true, options: ['kimi_web_search'] };
+            return { search_mode: 'provider_builtin', options: ['kimi_web_search'] };
         }
-
-        // DeepSeek, xAI, Cohere — these use client-side function-calling tools
-        // that require the application to execute the search. Not supported
-        // because we don't have a third-party search API integration.
-        // Return false explicitly so the UI shows "Not supported".
-        if (url.includes('deepseek') || url.includes('x.ai') || url.includes('xai.') || url.includes('cohere')) {
-            return { supports: false, options: [] };
-        }
-
-        // Generic openai_compatible — cannot determine
-        return { supports: null, options: [] };
+        return { search_mode: 'none', options: [] };
     }
 
-    // Groq, Together, Mistral, Azure — cannot reliably auto-detect
-    return { supports: null, options: [] };
+    return { search_mode: 'none', options: [] };
+}
+
+// Legacy compatibility wrapper
+function detectWebSearch(providerKey, modelId, baseUrl) {
+    const candidate = detectSearchModeCandidate(providerKey, modelId, baseUrl);
+    return {
+        supports: candidate.search_mode !== 'none' ? true : (providerKey === 'openai_compatible' ? null : false),
+        options: candidate.options,
+    };
 }
 
 // ── STATIC MODEL PRICING ($ per million tokens) ────────────
