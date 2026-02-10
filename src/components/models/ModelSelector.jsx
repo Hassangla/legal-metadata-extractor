@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { RefreshCw, Loader2, Search, CheckCircle, XCircle, HelpCircle, Cpu, Globe } from 'lucide-react';
+import { RefreshCw, Loader2, Search, CheckCircle, XCircle, HelpCircle, Cpu, Globe, ShieldCheck, ShieldX } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PROVIDER_LABELS = {
