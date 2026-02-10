@@ -131,11 +131,10 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
 
     // OpenAI / OpenAI-compatible (default)
 
-    if (webSearchChoice === 'web_search_preview') {
+    if (webSearchChoice === 'web_search_preview' && providerType === 'openai') {
         const id = (modelId || '').toLowerCase();
 
         // Path A: Dedicated search models → Chat Completions + web_search_options
-        // These models are specifically trained for search and use Chat Completions.
         const isSearchModel = id.includes('search-preview') || id.includes('search-api');
 
         if (isSearchModel) {
@@ -156,17 +155,10 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
             };
         }
 
-        // Path B: All other models → Responses API + web_search tool
-        // The Responses API allows any capable model to use web search as a tool.
-        // NOTE: GPT-4.1 models do NOT support web search via the Responses API.
-        // They will respond with "no web search tool available" instead of actually searching.
-        // For these models, fall through to standard Chat Completions (no search).
-        const gpt41Check = (modelId || '').toLowerCase();
-        const isGpt41 = gpt41Check.includes('gpt-4.1');
-
-        if (cfg.responsesUrl && !isGpt41) {
-            const respId = (modelId || '').toLowerCase();
-            const isOSeries = /^(o1|o3|o4)/.test(respId);
+        // Path B: Allowlisted models → Responses API + web_search tool
+        // Strict gate: only use Responses API for verified models
+        if (cfg.responsesUrl && isOpenAIWebSearchModel(modelId)) {
+            const isOSeries = /^(o1|o3|o4)/.test(id);
             const body = {
                 model: modelId,
                 instructions: systemPrompt,
@@ -183,8 +175,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
             };
         }
 
-        // Fallback: provider has no responsesUrl (shouldn't happen for openai/openrouter)
-        // Fall through to standard Chat Completions without search
+        // Model not in web search allowlist — fall through to standard Chat Completions (no search)
     }
 
     // Standard Chat Completions path (no web search, Kimi search, Perplexity builtin, or fallback)
