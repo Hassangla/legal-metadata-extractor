@@ -237,6 +237,12 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
     // Kimi server-side web search uses builtin_function tool in Chat Completions
     if (webSearchChoice === 'kimi_web_search') {
         body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
+        body.tool_choice = 'auto';
+        // K2.5 thinking models break $web_search; disable thinking to use Instant mode
+        if (/k2\.?5/i.test(modelId)) {
+            body.thinking = { type: 'disabled' };
+            body.temperature = 0.6;
+        }
     }
     // Note: 'builtin' (Perplexity) needs no tools array — search is automatic.
     // Note: response_format omitted — some models/providers reject it,
