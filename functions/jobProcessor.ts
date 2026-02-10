@@ -155,6 +155,22 @@ function extractTextContent(providerType, data) {
         if (textParts.length > 0) return textParts.join('\n');
     }
 
+    // OpenAI web_search_preview: response text is in choices[0].output array
+    const output = data.choices?.[0]?.output;
+    if (Array.isArray(output)) {
+        const textParts = [];
+        for (const item of output) {
+            if (item.type === 'message' && Array.isArray(item.content)) {
+                for (const part of item.content) {
+                    if ((part.type === 'output_text' || part.type === 'text') && part.text) {
+                        textParts.push(part.text);
+                    }
+                }
+            }
+        }
+        if (textParts.length > 0) return textParts.join('\n');
+    }
+
     // Fallback: if content is null but tool_calls exist (e.g., wrong tool format),
     // try to extract any useful text from tool call arguments
     if (msg.tool_calls && msg.tool_calls.length > 0) {
