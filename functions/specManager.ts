@@ -120,6 +120,9 @@ Deno.serve(async (req) => {
             }
             
             case 'save': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required' }, { status: 403 });
+                }
                 const { spec_text, change_note } = params;
                 
                 if (!spec_text || spec_text.trim().length === 0) {
@@ -187,6 +190,9 @@ Deno.serve(async (req) => {
             }
             
             case 'restoreDefault': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required' }, { status: 403 });
+                }
                 const specs = await base44.entities.Spec.filter({ is_active: true });
                 let spec;
                 
@@ -223,6 +229,9 @@ Deno.serve(async (req) => {
 
             // Fix 9: Action to restore from uploaded docx
             case 'restoreFromFile': {
+                if (user.role !== 'admin') {
+                    return Response.json({ error: 'Admin access required' }, { status: 403 });
+                }
                 const { file_url } = params;
                 if (!file_url) {
                     return Response.json({ error: 'file_url is required' }, { status: 400 });

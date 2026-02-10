@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle } from 'lucide-react';
+import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle, ShieldAlert } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -20,10 +20,12 @@ export default function SpecEditor() {
     const [saving, setSaving] = useState(false);
     const [activeTab, setActiveTab] = useState('edit');
     const [hasChanges, setHasChanges] = useState(false);
+    const [isAdmin, setIsAdmin] = useState(false);
 
     useEffect(() => {
         loadSpec();
         loadVersions();
+        base44.auth.me().then(u => setIsAdmin(u?.role === 'admin')).catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -115,11 +117,19 @@ export default function SpecEditor() {
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-semibold text-slate-900">Specification Editor</h2>
-                    <p className="text-slate-500 mt-1">
-                        Define the rules for legal metadata extraction
-                    </p>
+                <div className="flex items-center gap-3">
+                    <div>
+                        <h2 className="text-2xl font-semibold text-slate-900">Specification Editor</h2>
+                        <p className="text-slate-500 mt-1">
+                            Define the rules for legal metadata extraction
+                        </p>
+                    </div>
+                    {!isAdmin && (
+                        <Badge className="bg-slate-100 text-slate-600 gap-1">
+                            <ShieldAlert className="w-3 h-3" />
+                            Admin only
+                        </Badge>
+                    )}
                 </div>
                 {spec && (
                     <div className="text-right text-sm text-slate-500">
@@ -155,6 +165,7 @@ export default function SpecEditor() {
                                         onChange={(e) => setEditedText(e.target.value)}
                                         className="min-h-[500px] font-mono text-sm resize-y"
                                         placeholder="Enter specification text..."
+                                        readOnly={!isAdmin}
                                     />
                                     {hasChanges && (
                                         <Badge className="absolute top-2 right-2 bg-amber-100 text-amber-800">
@@ -163,35 +174,37 @@ export default function SpecEditor() {
                                     )}
                                 </div>
 
-                                <div className="flex items-center gap-4">
-                                    <Input
-                                        value={changeNote}
-                                        onChange={(e) => setChangeNote(e.target.value)}
-                                        placeholder="Change note (optional)"
-                                        className="flex-1"
-                                    />
-                                    <Button
-                                        onClick={handleSave}
-                                        disabled={saving || !hasChanges}
-                                        className="gap-2 bg-slate-900 hover:bg-slate-800"
-                                    >
-                                        {saving ? (
-                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                        ) : (
-                                            <Save className="w-4 h-4" />
-                                        )}
-                                        Save Changes
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        onClick={handleRestoreDefault}
-                                        disabled={saving}
-                                        className="gap-2"
-                                    >
-                                        <RotateCcw className="w-4 h-4" />
-                                        Restore Default
-                                    </Button>
-                                </div>
+                                {isAdmin && (
+                                    <div className="flex items-center gap-4">
+                                        <Input
+                                            value={changeNote}
+                                            onChange={(e) => setChangeNote(e.target.value)}
+                                            placeholder="Change note (optional)"
+                                            className="flex-1"
+                                        />
+                                        <Button
+                                            onClick={handleSave}
+                                            disabled={saving || !hasChanges}
+                                            className="gap-2 bg-slate-900 hover:bg-slate-800"
+                                        >
+                                            {saving ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Save className="w-4 h-4" />
+                                            )}
+                                            Save Changes
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            onClick={handleRestoreDefault}
+                                            disabled={saving}
+                                            className="gap-2"
+                                        >
+                                            <RotateCcw className="w-4 h-4" />
+                                            Restore Default
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         </CardContent>
                     </Card>
