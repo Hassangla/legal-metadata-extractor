@@ -353,6 +353,91 @@ function extractJSON(content) {
     return null;
 }
 
+// ── TOOL URL EXTRACTION FROM PROVIDER RESPONSES ─────────────
+
+function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
+    const urls = [];
+
+    if (isResponsesApi) {
+        // OpenAI Responses API: URLs in annotations of message content
+        if (Array.isArray(data?.output)) {
+            for (const item of data.output) {
+                if (item.type === 'message' && Array.isArray(item.content)) {
+                    for (const part of item.content) {
+                        if (part.annotations && Array.isArray(part.annotations)) {
+                            for (const ann of part.annotations) {
+                                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return [...new Set(urls)];
+    }
+
+    if (providerType === 'anthropic') {
+        for (const block of (data?.content || [])) {
+            if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+                for (const item of block.content) {
+                    if (item.url) urls.push(item.url);
+                }
+            }
+        }
+        return [...new Set(urls)];
+    }
+
+    if (providerType === 'google') {
+        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        for (const chunk of chunks) {
+            if (chunk.web?.uri) urls.push(chunk.web.uri);
+        }
+        return [...new Set(urls)];
+    }
+
+    if (providerType === 'perplexity') {
+        const citations = data?.citations || [];
+        for (const c of citations) {
+            if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
+        }
+        return [...new Set(urls)];
+    }
+
+    // OpenAI Chat Completions (search models)
+    const msg = data?.choices?.[0]?.message;
+    if (msg) {
+        if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+                if (part.annotations && Array.isArray(part.annotations)) {
+                    for (const ann of part.annotations) {
+                        if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+                    }
+                }
+            }
+        }
+        if (Array.isArray(msg.annotations)) {
+            for (const ann of msg.annotations) {
+                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+            }
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function isNoSearchToolError(providerType, data, content, isResponsesApi) {
+    if (!content && !data) return false;
+    const text = (content || '').toLowerCase();
+    if (text.includes('no web search tool') ||
+        text.includes('web search is not available') ||
+        text.includes('i don\'t have access to web search') ||
+        text.includes('cannot perform web search') ||
+        text.includes('web search tool not available')) {
+        return true;
+    }
+    if (isResponsesApi && data?.status === 'failed') return true;
+    return false;
+}
+
 // ── URL VERIFICATION HELPER ──────────────────────────────────
 
 async function verifyUrlLoads(url) {
