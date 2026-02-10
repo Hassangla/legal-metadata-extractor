@@ -907,6 +907,26 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                             };
                         }
 
+                        // ── SERVER-SIDE TOOL-DEPENDENT ENFORCEMENT ──
+                        // When web search was not available (or effective search is 'none'),
+                        // blank out all web-derived fields and set Flag = "No sources".
+                        // This ensures compliance even if the LLM ignores the instruction.
+                        if (!hasRealWebSearch && parsed.output) {
+                            const toolDependentFields = [
+                                'Instrument_URL', 'Enactment_Date', 'Date_of_Entry_in_Force',
+                                'Repeal_Year', 'Current_Status', 'Public',
+                            ];
+                            for (const f of toolDependentFields) {
+                                parsed.output[f] = '';
+                            }
+                            parsed.output.Flag = 'No sources';
+                            if (parsed.evidence) {
+                                const prev = parsed.evidence.Missing_Conflict_Reason || '';
+                                const note = 'Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.';
+                                parsed.evidence.Missing_Conflict_Reason = prev ? `${prev}; ${note}` : note;
+                            }
+                        }
+
                         // Inject server-side values the LLM must not override
                         if (parsed.output) {
                             parsed.output.Economy_Code = economyCode;
