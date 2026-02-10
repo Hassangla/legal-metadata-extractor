@@ -508,7 +508,20 @@ async function finalizeAndVerify(ev, ctx) {
         addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
     }
 
-    // ── (A) URL CLOSED SET enforcement ──
+    // ── (A1) TOOL URL PROVENANCE enforcement (primary trusted source) ──
+    // If we have tool URLs from provider artifacts, the Final URL must be in that set
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL && ctx.toolUrlSet && ctx.toolUrlSet.length > 0) {
+        const inToolSet = urlInList(ev.Final_Instrument_URL, ctx.toolUrlSet.join(','));
+        if (!inToolSet) {
+            addReason(
+                `URL provenance violation: Final_Instrument_URL "${ev.Final_Instrument_URL}" ` +
+                `not found in tool_url_set (${ctx.toolUrlSet.length} proven URLs from search tool). URL blanked.`
+            );
+            ev.Final_Instrument_URL = '';
+        }
+    }
+
+    // ── (A2) URL CLOSED SET enforcement (secondary check) ──
     // Only run when we had real web search (otherwise URL is already blank from step C)
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const inConsidered = urlInList(ev.Final_Instrument_URL, ev.URLs_Considered);
