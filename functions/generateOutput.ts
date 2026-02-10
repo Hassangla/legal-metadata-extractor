@@ -100,11 +100,19 @@ Deno.serve(async (req) => {
         const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         const base64Data = uint8ArrayToBase64(new Uint8Array(buffer));
 
-        // Washington DC timezone (US/Eastern)
+        // Generate Eastern Time timestamp using reliable Intl.DateTimeFormat
         const now = new Date();
-        const eastern = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-        const pad = (n) => String(n).padStart(2, '0');
-        const timestamp = `${eastern.getFullYear()}-${pad(eastern.getMonth() + 1)}-${pad(eastern.getDate())}T${pad(eastern.getHours())}-${pad(eastern.getMinutes())}-${pad(eastern.getSeconds())}`;
+        const fmt = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false,
+        });
+        const parts = {};
+        for (const { type, value } of fmt.formatToParts(now)) {
+            parts[type] = value;
+        }
+        const timestamp = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}-${parts.minute}-${parts.second}`;
         const filename = `legal_metadata_output_${timestamp}.xlsx`;
 
         return Response.json({
