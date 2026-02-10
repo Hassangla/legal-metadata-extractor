@@ -125,8 +125,8 @@ const PROVIDERS = {
         },
         chatFormat: 'openai',
         cloudflareRisk: false,
-        webSearchTool: null,
-        note: 'Generic fallback for any API that follows the OpenAI spec.',
+        webSearchTool: null,  // No server-side search — function-calling tools require client-side execution
+        note: 'Generic fallback for any API that follows the OpenAI spec. Web search not available.',
     },
 };
 
@@ -230,7 +230,8 @@ async function safeFetch(url, options, providerKey) {
 }
 
 // ── GOOGLE HELPER (uses ?key= query param) ──────────────────
-
+// Note: Google AI API requires key as query param. The Gemini API does not support
+// x-goog-api-key header for generativelanguage.googleapis.com endpoints.
 function googleFetchUrl(base, path, apiKey) {
     const url = new URL(path, base.replace(/\/+$/, '') + '/');
     url.searchParams.set('key', apiKey);
@@ -296,40 +297,12 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: null, options: [] };
     }
 
-    // ── OpenAI-Compatible: identify known providers by base URL ──
+    // ── OpenAI-Compatible: only server-side search providers are supported ──
     if (providerKey === 'openai_compatible') {
-
-        // Moonshot / Kimi — uses builtin_function $web_search
-        if (url.includes('moonshot') || url.includes('kimi')) {
-            return { supports: true, options: ['kimi_web_search'] };
-        }
-
-        // DeepSeek — deepseek-chat and deepseek-v* support tool use
-        if (url.includes('deepseek')) {
-            if (id.includes('deepseek-chat') || id.includes('deepseek-v') || id.includes('deepseek-r')) {
-                return { supports: true, options: ['web_search'] };
-            }
-            return { supports: null, options: [] };
-        }
-
-        // xAI / Grok — grok models support function calling
-        if (url.includes('x.ai') || url.includes('xai.')) {
-            if (id.includes('grok')) {
-                return { supports: true, options: ['web_search'] };
-            }
-            return { supports: null, options: [] };
-        }
-
-        // Cohere — command models support web connectors
-        if (url.includes('cohere')) {
-            if (id.includes('command')) {
-                return { supports: true, options: ['web_search'] };
-            }
-            return { supports: false, options: [] };
-        }
-
-        // Generic openai_compatible — cannot determine
-        return { supports: null, options: [] };
+        // None of the openai_compatible providers have true server-side web search.
+        // DeepSeek, xAI, Kimi/Moonshot, Cohere all use client-side tool calling,
+        // which requires the application to execute the search — not supported.
+        return { supports: false, options: [] };
     }
 
     // Groq, Together, Mistral, Azure — cannot reliably auto-detect
@@ -386,7 +359,8 @@ const STATIC_PRICING = {
 function lookupStaticPricing(modelId) {
     const id = (modelId || '').toLowerCase();
     if (STATIC_PRICING[id]) return STATIC_PRICING[id];
-    for (const [key, p] of Object.entries(STATIC_PRICING)) {
+    const sorted = Object.entries(STATIC_PRICING).sort(([a], [b]) => b.length - a.length);
+    for (const [key, p] of sorted) {
         if (id.startsWith(key) || id.includes(key)) return p;
     }
     return null;
