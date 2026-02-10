@@ -272,7 +272,7 @@ function extractTextContent(providerType, data, isResponsesApi) {
         for (let i = msg.tool_calls.length - 1; i >= 0; i--) {
             const tc = msg.tool_calls[i];
             const args = tc.function?.arguments || tc.arguments || '';
-            if (args.includes('"output"') || args.includes('"evidence"')) {
+            if (args.includes('"evidence"') || args.includes('"Final_')) {
                 return args;
             }
         }
