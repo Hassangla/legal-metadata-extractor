@@ -47,6 +47,7 @@ Deno.serve(async (req) => {
                 'Current Status': o.Current_Status || o['Current Status'] || o['Current_Status'] || '',
                 'Public': o.Public || '',
                 'Flag': o.Flag || '',
+                'Extraction_Status': o.Extraction_Status || '',
             };
         });
 

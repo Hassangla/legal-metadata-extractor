@@ -526,6 +526,11 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                         const content = extractTextContent(providerType, data);
                         let parsed = extractJSON(content);
 
+                        // Tag extraction status
+                        if (parsed && parsed.output) {
+                            parsed.output.Extraction_Status = 'success';
+                        }
+
                         if (!parsed) {
                             const hasToolCalls = !!(data.choices?.[0]?.message?.tool_calls?.length);
                             const rawContent = data.choices?.[0]?.message?.content;
@@ -554,6 +559,7 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                                     Current_Status: '',
                                     Public: '',
                                     Flag: 'No sources',
+                                    Extraction_Status: 'parse_error',
                                 },
                                 evidence: {
                                     Row_Index: row.row_index,
