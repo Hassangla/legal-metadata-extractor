@@ -94,7 +94,7 @@ async function decryptString(ciphertext) {
 
 // ── BUILD LLM REQUEST (provider-specific) ───────────────────
 
-function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSearchChoice, baseUrl, apiKey) {
+function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSearchChoice, baseUrl, apiKey, _opts) {
     const cfg = CHAT_CONFIGS[providerType] || CHAT_CONFIGS.openai_compatible;
 
     if (cfg.chatFormat === 'anthropic') {
