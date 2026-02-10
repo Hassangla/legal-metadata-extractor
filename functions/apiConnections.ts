@@ -898,8 +898,6 @@ Deno.serve(async (req) => {
                 }
 
                 // Re-apply web search detection on ALL cached models.
-                // This patches models cached before detectWebSearch was expanded,
-                // including ones previously marked false that may now be detected as true.
                 if (conn && models.length > 0) {
                     const pk = conn.provider_type || 'openai_compatible';
                     for (const m of models) {
