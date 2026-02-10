@@ -1,116 +1,74 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
-// Fix 9: Full spec text derived from the authoritative specification document.
-// This replaces the rough approximation with the complete, structured spec content.
-const DEFAULT_SPEC = `# Legal Metadata Extractor — Authoritative Specification
+const DEFAULT_SPEC = `# Legal Instrument Metadata Extractor — Specification
 
-## 1. Purpose
-This specification defines the rules for extracting legal instrument metadata from structured input data using AI-assisted web search and analysis. It is the single source of truth for how the extraction engine processes each row.
+## AUTHORITY NOTICE
+This document is the primary instruction set. Follow it exactly as written. Do not summarize, paraphrase, substitute defaults, or override any requirement. If required sources are unavailable, do not guess. Explain the limitation and record it in Evidence.
 
-## 2. Input File Requirements
-File 1 (Excel) must contain the following columns in any order:
-- Owner
-- Economy
-- Legal basis
-- Question
-- Topic
+## SECTION: Role
+You are a legal-instrument metadata extraction and verification tool. For each row, you must research the referenced legal basis using Web Search, apply the rules in this specification, and return structured JSON.
 
-Each row represents one legal instrument to be identified and characterized.
+## SECTION: Input
+Input columns: Owner | Economy | Legal basis | Question | Topic
+The Economy_Code is provided pre-looked-up from the economy codes database. Do not change it.
 
-## 3. Output File Requirements
-File 2 (Excel) with two sheets:
+## SECTION: Output Fields (Required JSON keys in "output" object)
+1. Economy_Code — provided; copy as-is
+2. Economy — copy from input
+3. Language_Doc — language of the official publication copy. Write language name in English (e.g., Arabic, French). If bilingual: 'Pashto / Dari'. Justify in Evidence.
+4. Instrument_Full_Name_Original_Language — normalized official title in the original language/script (see Title Normalization Rules)
+5. Instrument_Published_Name — if Language_Doc is French or Spanish: use normalized title as-is (DO NOT translate). Otherwise: English name (prefer official English title; else careful translation).
+6. Instrument_URL — single best URL supporting the instrument. Prefer same source used for title/metadata. Prefer higher tiers.
+7. Enactment_Date — enactment/adoption/promulgation date. Format: YYYY-MM-DD when known; YYYY if only year.
+8. Date_of_Entry_in_Force — effective date. If 'effective on publication date', use publication date. If 'effective X days after publication', compute and record calculation in Evidence. If unclear, leave blank.
+9. Repeal_Year — only if verifiable (YYYY format). Leave blank if uncertain.
+10. Current_Status — only: 'In force', 'Repealed', or blank if uncertain. Mark 'Repealed' only with clear authoritative support.
+11. Public — 'Yes' if at least one URL is accessible without login/paywall; 'No' with note if not.
+12. Flag — blank for Tier 1-2 sources. 'Tier 3' / 'Tier 4' / 'Tier 5' / 'No sources' based on worst tier used.
 
-### Sheet 1: Output
-Columns (exact order):
-1. Owner — copied from input
-2. Economy — copied from input
-3. Economy_Code — looked up from economy_codes mapping (case-insensitive, trimmed). If not found, leave blank and flag.
-4. Legal_basis — copied from input
-5. Question — copied from input
-6. Topic — copied from input
-7. Instrument_Title — the official title of the identified legal instrument, normalized (excess whitespace removed, major words capitalized, official abbreviations preserved)
-8. Instrument_URL — the source URL where the instrument text or reference was found
-9. Instrument_Date — in YYYY-MM-DD format. If only year is known, use YYYY-01-01. If unknown, leave blank and add DATE_UNCERTAIN flag.
-10. Instrument_Type — the type/category of the legal instrument (e.g., Act, Regulation, Decree, Order, Directive, Treaty, etc.)
-11. Extraction_Status — one of: success | partial | failed
-12. Confidence_Score — a decimal between 0.0 and 1.0 (see scoring rules below)
-13. Processing_Notes — any relevant notes about the extraction
+## SECTION: Evidence Fields (Required JSON keys in "evidence" object)
+Row_Index | Economy | Economy_Code | Legal_basis_verbatim | Query_1 | Query_2 | Query_3 | URLs_Considered | Selected_Source_URLs | Source_Tier (1/2/3/4/5) | Public_Access (Yes/No + note) | Raw_Official_Title_As_Source (verbatim) | Normalized_Title_Used | Language_Justification | Instrument_URL_Support | Enactment_Support | EntryIntoForce_Support | Status_Support | Missing_Conflict_Reason | Normalization_Notes
 
-### Sheet 2: Evidence
-Columns (exact order):
-1. Row_Index — 1-based row number matching the input
-2. Query_1 — [Legal basis] + [Economy] + "official text"
-3. Query_2 — [Legal basis] + [Economy] + "legislation database"
-4. Query_3 — [Topic] + [Economy] + "legal instrument" + [Question keywords]
-5. URLs_Considered — semicolon-separated list of all URLs reviewed
-6. Selected_Source_URLs — semicolon-separated list of URLs from which data was extracted
-7. Tier — the tier of the primary source (1–4)
-8. Raw_Evidence — the raw text extracted or referenced from the source
-9. Extraction_Logic — a brief explanation of the reasoning used to select and extract the instrument
-10. Flags — comma-separated list of applicable flags
+## SECTION: Non-Negotiable Rules
+1. Do not invent names, dates, language, status, repeal year, or URLs.
+2. If a field cannot be verified under the tier rules, leave it blank and explain in Evidence.
+3. Use web search for research.
+4. Escalate sources only as needed: Tier 1 → Tier 2 → Tier 3 → Tier 4 → Tier 5.
+5. Date formats: YYYY-MM-DD when known; YYYY if only year known.
 
-## 4. Processing Rules
+## SECTION: Source Tiers
+Tier 1 (official/primary): Official gazette; parliament/ministry/government legal portal; official consolidated legal database; official government domains.
+Tier 2 (reputable legal databases): WIPO Lex, ILO NATLEX, curated regional portals reproducing primary material.
+Tier 3 (last resort reputable): Major university repositories, recognized legal publishers, reputable NGOs hosting document copies.
+Tier 4 (any relevant, if Tier 1-3 fail): General informational sites, news, summaries, mirrors. Low confidence.
+Tier 5 (absolute last resort): Use only if Tier 1-4 fail. Requires at least one URL and a verbatim title. May populate only: Language_Doc, original/published names, URL. Must NOT populate dates/status/repeal unless explicitly stated with verbatim support.
+If no usable source at any tier: Flag = 'No sources'. Explain in Evidence.
 
-### 4.1 Economy Code Mapping
-- Use the economy_codes table for mapping economy names to codes
-- Matching is case-insensitive and whitespace-trimmed
-- If no match is found, leave Economy_Code blank and add flag NO_ECONOMY_CODE
+## SECTION: Flag Rules
+Tier 1-2: Flag is blank. Tier 3: Flag = 'Tier 3'. Tier 4: Flag = 'Tier 4'. Tier 5: Flag = 'Tier 5'. No usable sources: Flag = 'No sources'.
+Row-level: use the worst (highest number) tier of any populated Output value.
 
-### 4.2 Query Generation
-For each row, generate exactly 3 search queries:
-- Query_1: [Legal basis] [Economy] official text
-- Query_2: [Legal basis] [Economy] legislation database
-- Query_3: [Topic] [Economy] legal instrument [Question keywords]
+## SECTION: Search Strategy (Per Row)
+Run up to 3 attempts. Stop early only if Tier 1-2 clearly support needed fields. Record all queries and top URLs in Evidence.
+Query_1: "<Legal basis>" "<Economy>" (law OR act OR code OR decree OR regulation)
+Query_2: "<Legal basis>" "<Economy>" (official gazette OR ministry of justice OR parliament OR government)
+Query_3: "<Legal basis>" "<Economy>" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")
+If Legal basis is vague, refine Query_3 using Question/Topic keywords.
+Multilingual: If economy/instrument likely published in non-English language, at least one query should use translated key terms in the relevant language/script.
 
-### 4.3 Source Tier System
-Sources are ranked by reliability:
-- Tier 1: Official government sources (.gov, .govt, official gazette domains)
-- Tier 2: International organization sources (WTO, UN, OECD, World Bank, etc.)
-- Tier 3: Academic and legal databases (LexisNexis, Westlaw, HeinOnline, university repositories)
-- Tier 4: Other reputable sources (legal news, professional associations, NGOs)
+## SECTION: Title Normalization Rules
+1. Prefer law number: use instrument type + number (e.g., Law No. X, Decree No. Y).
+2. Remove acronyms/parenthetical: 'Kindergarten Act (ZVrt)' → 'Kindergarten Act'.
+3. Remove Article references: 'Property Code, Arts. 37 and 40' → 'Property Code'.
+4. Remove dates when law number already identifies it: 'Ley Organica 10/1995, de 23 de noviembre, del Codigo Penal' → 'Ley Organica 10/1995'.
+5. Remove country names and non-essential phrases; remove 'the' before English law names.
+6. Numbering format: always 'No.'
+7. Capitalization: normalize consistently (avoid ALL CAPS).
+8. Record all changes in Normalization_Notes.
 
-Always prefer higher-tier sources. Record the tier of the primary source used.
-
-### 4.4 Instrument Title Normalization
-- Remove excess whitespace (multiple spaces, leading/trailing)
-- Capitalize the first letter of each major word (articles, prepositions under 4 letters remain lowercase unless at the start)
-- Keep official abbreviations intact (e.g., EU, WTO, GATT)
-- Preserve the original language title if the instrument is not in English
-
-### 4.5 Date Format
-- Standard output: YYYY-MM-DD
-- If only year is known: YYYY-01-01
-- If only year and month: YYYY-MM-01
-- If date is completely unknown: leave blank and add flag DATE_UNCERTAIN
-
-### 4.6 Multilingual Requirements
-- Always generate search queries in English
-- Additionally generate queries in the local official language(s) of the economy when applicable
-- If the primary source is in a non-English language, add flag TRANSLATION_NEEDED
-
-### 4.7 Confidence Scoring
-- 1.0: Perfect match — instrument found on a Tier 1 source with full metadata (title, date, URL, type all verified)
-- 0.8–0.9: Strong match — from Tier 1–2 sources with most metadata confirmed
-- 0.6–0.7: Partial match — from Tier 2–3 sources, or some metadata fields uncertain
-- 0.4–0.5: Weak match — from Tier 3–4 sources, or significant uncertainty in identification
-- 0.1–0.3: Low confidence — best guess based on limited evidence, manual review strongly recommended
-- 0.0: No match found — extraction failed entirely
-
-### 4.8 Flags Reference
-- NO_ECONOMY_CODE: Economy code mapping not found in the lookup table
-- DATE_UNCERTAIN: Date could not be fully determined from available sources
-- MULTIPLE_INSTRUMENTS: Multiple potentially relevant instruments were found; the most likely one was selected
-- TRANSLATION_NEEDED: Primary source is in a non-English language
-- MANUAL_REVIEW: Result requires human verification due to ambiguity or low confidence
-- LOW_CONFIDENCE: Confidence score is below 0.4
-- PARSE_ERROR: LLM response could not be parsed (system flag)
-- AMENDED: The instrument has been amended; the most recent version was used
-- SUPERSEDED: The instrument may have been superseded by a newer one
-
-## 5. Error Handling
-- If the LLM cannot identify any instrument: set Extraction_Status=failed, Confidence_Score=0.0, add MANUAL_REVIEW flag
-- If multiple instruments are found: select the most relevant one, set flag MULTIPLE_INSTRUMENTS, note alternatives in Processing_Notes
-- If a source URL is no longer accessible: note in Processing_Notes, try alternative sources`;
+## SECTION: Evidence-to-Output Synchronization
+Every populated output value must be supported by evidence. If any output field is blank but evidence contains a usable candidate, you must populate it or explain why in Missing_Conflict_Reason.
+Tier 5 findings: may only populate Language_Doc, names, URL. Not dates/status/repeal unless source text explicitly states them.`;
 
 Deno.serve(async (req) => {
     try {

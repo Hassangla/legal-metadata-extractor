@@ -87,11 +87,25 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         ],
         max_tokens: 4096,
         temperature: 0,
-        response_format: { type: 'json_object' },
     };
-    if (webSearchChoice && webSearchChoice !== 'none' && webSearchChoice !== 'builtin') {
-        body.tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }];
+
+    const useWebSearch = webSearchChoice && webSearchChoice !== 'none' && webSearchChoice !== 'builtin';
+
+    if (useWebSearch) {
+        // When using web search tools, do NOT set response_format (causes conflicts).
+        // JSON output is enforced via the prompt instructions instead.
+        if (webSearchChoice === 'web_search_preview') {
+            // OpenAI native web search — must use the built-in tool type
+            body.tools = [{ type: 'web_search_preview' }];
+        } else {
+            // Kimi, DeepSeek, other openai_compatible providers
+            body.tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web for current legal information', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } } }];
+        }
+    } else {
+        // No web search — safe to use response_format for reliable JSON
+        body.response_format = { type: 'json_object' };
     }
+
     return {
         url: cfg.chatUrl(baseUrl, modelId),
         init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
@@ -150,35 +164,57 @@ function extractJSON(content) {
 
 // ── MODEL PRICING (per million tokens) ──────────────────────
 const MODEL_PRICING = {
-    'gpt-4o':           { input: 2.50, output: 10.00 },
-    'gpt-4o-mini':      { input: 0.15, output: 0.60 },
-    'gpt-4-turbo':      { input: 10.00, output: 30.00 },
-    'gpt-4.1':          { input: 2.00, output: 8.00 },
-    'gpt-4.1-mini':     { input: 0.40, output: 1.60 },
-    'gpt-4.1-nano':     { input: 0.10, output: 0.40 },
-    'o1':               { input: 15.00, output: 60.00 },
-    'o1-mini':          { input: 1.10, output: 4.40 },
-    'o3':               { input: 2.00, output: 8.00 },
-    'o3-mini':          { input: 1.10, output: 4.40 },
-    'o4-mini':          { input: 1.10, output: 4.40 },
-    'claude-sonnet-4':  { input: 3.00, output: 15.00 },
-    'claude-opus-4':    { input: 15.00, output: 75.00 },
-    'claude-haiku-3.5': { input: 0.80, output: 4.00 },
-    'claude-3-5-sonnet':{ input: 3.00, output: 15.00 },
-    'gemini-2.5-pro':   { input: 1.25, output: 10.00 },
-    'gemini-2.5-flash': { input: 0.15, output: 0.60 },
-    'gemini-2.0-flash': { input: 0.10, output: 0.40 },
-    'moonshot-v1-auto':  { input: 0.55, output: 0.55 },
-    'moonshot-v1-8k':    { input: 0.17, output: 0.17 },
-    'moonshot-v1-32k':   { input: 0.33, output: 0.33 },
-    'moonshot-v1-128k':  { input: 0.83, output: 0.83 },
-    'kimi-latest':       { input: 0.55, output: 0.55 },
-    'deepseek-chat':     { input: 0.14, output: 0.28 },
-    'deepseek-reasoner': { input: 0.55, output: 2.19 },
-    'sonar':             { input: 1.00, output: 1.00 },
-    'sonar-pro':         { input: 3.00, output: 15.00 },
-    'grok-3':            { input: 3.00, output: 15.00 },
-    'grok-3-mini':       { input: 0.30, output: 0.50 },
+    // OpenAI
+    'gpt-4o':              { input: 2.50,  output: 10.00 },
+    'gpt-4o-mini':         { input: 0.15,  output: 0.60 },
+    'gpt-4o-search-preview': { input: 2.50, output: 10.00 },
+    'gpt-4-turbo':         { input: 10.00, output: 30.00 },
+    'gpt-4.1':             { input: 2.00,  output: 8.00 },
+    'gpt-4.1-mini':        { input: 0.40,  output: 1.60 },
+    'gpt-4.1-nano':        { input: 0.10,  output: 0.40 },
+    'gpt-4.5-preview':     { input: 75.00, output: 150.00 },
+    'gpt-3.5-turbo':       { input: 0.50,  output: 1.50 },
+    'chatgpt-4o-latest':   { input: 5.00,  output: 15.00 },
+    'o1':                  { input: 15.00, output: 60.00 },
+    'o1-mini':             { input: 1.10,  output: 4.40 },
+    'o1-preview':          { input: 15.00, output: 60.00 },
+    'o3':                  { input: 2.00,  output: 8.00 },
+    'o3-mini':             { input: 1.10,  output: 4.40 },
+    'o4-mini':             { input: 1.10,  output: 4.40 },
+    // Anthropic
+    'claude-sonnet-4':     { input: 3.00,  output: 15.00 },
+    'claude-opus-4':       { input: 15.00, output: 75.00 },
+    'claude-haiku-3.5':    { input: 0.80,  output: 4.00 },
+    'claude-3-5-sonnet':   { input: 3.00,  output: 15.00 },
+    'claude-3-5-haiku':    { input: 0.80,  output: 4.00 },
+    'claude-3-opus':       { input: 15.00, output: 75.00 },
+    // Google
+    'gemini-2.5-pro':      { input: 1.25,  output: 10.00 },
+    'gemini-2.5-flash':    { input: 0.15,  output: 0.60 },
+    'gemini-2.0-flash':    { input: 0.10,  output: 0.40 },
+    'gemini-1.5-pro':      { input: 1.25,  output: 5.00 },
+    'gemini-1.5-flash':    { input: 0.075, output: 0.30 },
+    // Moonshot / Kimi
+    'moonshot-v1-auto':    { input: 0.55,  output: 0.55 },
+    'moonshot-v1-8k':      { input: 0.17,  output: 0.17 },
+    'moonshot-v1-32k':     { input: 0.33,  output: 0.33 },
+    'moonshot-v1-128k':    { input: 0.83,  output: 0.83 },
+    'kimi-latest':         { input: 0.55,  output: 0.55 },
+    // DeepSeek
+    'deepseek-chat':       { input: 0.14,  output: 0.28 },
+    'deepseek-reasoner':   { input: 0.55,  output: 2.19 },
+    // Perplexity
+    'sonar':               { input: 1.00,  output: 1.00 },
+    'sonar-pro':           { input: 3.00,  output: 15.00 },
+    'sonar-reasoning':     { input: 1.00,  output: 5.00 },
+    'sonar-reasoning-pro': { input: 2.00,  output: 8.00 },
+    // xAI
+    'grok-3':              { input: 3.00,  output: 15.00 },
+    'grok-3-mini':         { input: 0.30,  output: 0.50 },
+    'grok-2':              { input: 2.00,  output: 10.00 },
+    // Mistral
+    'mistral-large':       { input: 2.00,  output: 6.00 },
+    'mistral-small':       { input: 0.10,  output: 0.30 },
 };
 
 function estimateCost(modelId, providerType, inputTokens, outputTokens) {
@@ -306,54 +342,73 @@ Deno.serve(async (req) => {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data;
                         const economyCode = economyMap[input.Economy?.toLowerCase()?.trim()] || '';
+                        const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
-                        const query1 = `${input.Legal_basis || input['Legal basis']} ${input.Economy} official text`;
-                        const query2 = `${input.Legal_basis || input['Legal basis']} ${input.Economy} legislation database`;
-                        const query3 = `${input.Topic} ${input.Economy} legal instrument ${input.Question}`;
+                        // Spec-compliant 3-attempt search strategy
+                        const query1 = `"${legalBasis}" "${input.Economy}" (law OR act OR code OR decree OR regulation)`;
+                        const query2 = `"${legalBasis}" "${input.Economy}" (official gazette OR ministry of justice OR parliament OR government)`;
+                        const query3 = legalBasis
+                            ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
+                            : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
-                        const systemPrompt = `You are a legal metadata extraction assistant. Follow the specification below EXACTLY. Always respond with valid JSON only — no markdown, no explanation.\n\n${specText}`;
+                        const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY. Always respond with valid JSON only — no markdown, no explanation, no code fences.\n\n${specText}`;
 
-                        const userPrompt = `Extract metadata for this row:
-- Owner: ${input.Owner}
+                        const userPrompt = `Extract legal instrument metadata for this row.
+
+INPUT DATA:
 - Economy: ${input.Economy}
 - Economy_Code: ${economyCode}
-- Legal basis: ${input.Legal_basis || input['Legal basis']}
+- Legal basis: ${legalBasis}
 - Question: ${input.Question}
 - Topic: ${input.Topic}
 
-Search queries to use:
+SEARCH QUERIES (use for web search; adapt to local language if non-English economy):
 1. ${query1}
 2. ${query2}
 3. ${query3}
 
-Return a JSON object with exactly this structure:
+INSTRUCTIONS:
+1. Search using the queries above. Stop early only if Tier 1-2 sources clearly answer the needed fields.
+2. Identify the best source (prefer Tier 1 official government, then Tier 2 legal databases, then Tier 3, etc.).
+3. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
+4. Determine Language_Doc (language of official publication), Enactment_Date, Date_of_Entry_in_Force, Current_Status.
+5. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
+6. Record all evidence, URLs considered, tier, and reasoning.
+
+Return a JSON object with EXACTLY this structure (no extra keys, no missing keys):
 {
   "output": {
-    "Owner": "${input.Owner}",
-    "Economy": "${input.Economy}",
     "Economy_Code": "${economyCode}",
-    "Legal_basis": "${input.Legal_basis || input['Legal basis']}",
-    "Question": "${input.Question}",
-    "Topic": "${input.Topic}",
-    "Instrument_Title": "extracted title",
-    "Instrument_URL": "source URL",
-    "Instrument_Date": "YYYY-MM-DD",
-    "Instrument_Type": "type",
-    "Extraction_Status": "success|partial|failed",
-    "Confidence_Score": 0.0,
-    "Processing_Notes": ""
+    "Economy": "${input.Economy}",
+    "Language_Doc": "",
+    "Instrument_Full_Name_Original_Language": "",
+    "Instrument_Published_Name": "",
+    "Instrument_URL": "",
+    "Enactment_Date": "",
+    "Date_of_Entry_in_Force": "",
+    "Repeal_Year": "",
+    "Current_Status": "",
+    "Public": "",
+    "Flag": ""
   },
   "evidence": {
     "Row_Index": ${row.row_index},
-    "Query_1": "${query1}",
-    "Query_2": "${query2}",
-    "Query_3": "${query3}",
+    "Query_1": ${JSON.stringify(query1)},
+    "Query_2": ${JSON.stringify(query2)},
+    "Query_3": ${JSON.stringify(query3)},
     "URLs_Considered": "",
     "Selected_Source_URLs": "",
-    "Tier": "",
-    "Raw_Evidence": "",
-    "Extraction_Logic": "",
-    "Flags": ""
+    "Source_Tier": "",
+    "Public_Access": "",
+    "Raw_Official_Title_As_Source": "",
+    "Normalized_Title_Used": "",
+    "Language_Justification": "",
+    "Instrument_URL_Support": "",
+    "Enactment_Support": "",
+    "EntryIntoForce_Support": "",
+    "Status_Support": "",
+    "Missing_Conflict_Reason": "",
+    "Normalization_Notes": ""
   }
 }`;
 
@@ -382,23 +437,44 @@ Return a JSON object with exactly this structure:
                         if (!parsed) {
                             parsed = {
                                 output: {
-                                    Owner: input.Owner, Economy: input.Economy, Economy_Code: economyCode,
-                                    Legal_basis: input.Legal_basis || input['Legal basis'],
-                                    Question: input.Question, Topic: input.Topic,
-                                    Extraction_Status: 'failed', Confidence_Score: 0,
-                                    Processing_Notes: 'Failed to parse LLM response',
+                                    Economy_Code: economyCode,
+                                    Economy: input.Economy,
+                                    Language_Doc: '',
+                                    Instrument_Full_Name_Original_Language: '',
+                                    Instrument_Published_Name: '',
+                                    Instrument_URL: '',
+                                    Enactment_Date: '',
+                                    Date_of_Entry_in_Force: '',
+                                    Repeal_Year: '',
+                                    Current_Status: '',
+                                    Public: '',
+                                    Flag: 'No sources',
                                 },
                                 evidence: {
                                     Row_Index: row.row_index,
                                     Query_1: query1, Query_2: query2, Query_3: query3,
-                                    Raw_Evidence: content.slice(0, 2000), Flags: 'PARSE_ERROR',
+                                    URLs_Considered: '',
+                                    Selected_Source_URLs: '',
+                                    Source_Tier: '',
+                                    Missing_Conflict_Reason: 'Failed to parse LLM response: ' + (content || '').slice(0, 500),
                                 },
                             };
                         }
 
-                        if (parsed.output) parsed.output.Economy_Code = economyCode;
+                        // Inject server-side values the LLM must not override
+                        if (parsed.output) {
+                            parsed.output.Economy_Code = economyCode;
+                            parsed.output.Economy = input.Economy;
+                        }
+                        if (parsed.evidence) {
+                            parsed.evidence.Row_Index = row.row_index;
+                            parsed.evidence.Economy = input.Economy;
+                            parsed.evidence.Economy_Code = economyCode;
+                            parsed.evidence.Legal_basis_verbatim = legalBasis;
+                        }
                         if (!economyCode && parsed.evidence) {
-                            parsed.evidence.Flags = [parsed.evidence.Flags, 'NO_ECONOMY_CODE'].filter(Boolean).join(', ');
+                            const prev = parsed.evidence.Missing_Conflict_Reason || '';
+                            parsed.evidence.Missing_Conflict_Reason = [prev, 'Economy code not found in lookup table'].filter(Boolean).join('; ');
                         }
 
                         await base44.entities.JobRow.update(row.id, {
