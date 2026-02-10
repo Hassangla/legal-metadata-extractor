@@ -81,17 +81,17 @@ Deno.serve(async (req) => {
                 'Status_Support': e.Status_Support || '',
                 'Missing_Conflict_Reason': e.Missing_Conflict_Reason || e['Missing/Conflict_Reason'] || '',
                 'Normalization_Notes': e.Normalization_Notes || '',
-                // Final_* fields — mirror from Output for evidence-to-output sync
-                'Final_Language_Doc': o.Language_Doc || '',
-                'Final_Instrument_Full_Name_Original_Language': o.Instrument_Full_Name_Original_Language || '',
-                'Final_Instrument_Published_Name': o.Instrument_Published_Name || '',
-                'Final_Instrument_URL': o.Instrument_URL || '',
-                'Final_Enactment_Date': o.Enactment_Date || '',
-                'Final_Date_of_Entry_in_Force': o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || '',
-                'Final_Repeal_Year': o.Repeal_Year || '',
-                'Final_Current_Status': o.Current_Status || o['Current Status'] || '',
-                'Final_Public': o.Public || '',
-                'Final_Flag': o.Flag || '',
+                // Final_* fields — read from evidence_json directly; fall back to output_json for older rows
+                'Final_Language_Doc': e.Final_Language_Doc ?? o.Language_Doc ?? '',
+                'Final_Instrument_Full_Name_Original_Language': e.Final_Instrument_Full_Name_Original_Language ?? o.Instrument_Full_Name_Original_Language ?? '',
+                'Final_Instrument_Published_Name': e.Final_Instrument_Published_Name ?? o.Instrument_Published_Name ?? '',
+                'Final_Instrument_URL': e.Final_Instrument_URL ?? o.Instrument_URL ?? '',
+                'Final_Enactment_Date': e.Final_Enactment_Date ?? o.Enactment_Date ?? '',
+                'Final_Date_of_Entry_in_Force': e.Final_Date_of_Entry_in_Force ?? (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
+                'Final_Repeal_Year': e.Final_Repeal_Year ?? o.Repeal_Year ?? '',
+                'Final_Current_Status': e.Final_Current_Status ?? (o.Current_Status || o['Current Status'] || ''),
+                'Final_Public': e.Final_Public ?? o.Public ?? '',
+                'Final_Flag': e.Final_Flag ?? o.Flag ?? '',
             };
         });
 
