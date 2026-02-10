@@ -31,8 +31,6 @@ export default function History() {
     const [generating, setGenerating] = useState(null);
     const [rerunning, setRerunning] = useState(null);
     const [deleting, setDeleting] = useState(null);
-    const PAGE_SIZE = 10;
-    const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
     useEffect(() => {
         loadJobs();
@@ -40,7 +38,7 @@ export default function History() {
 
     const loadJobs = async () => {
         try {
-            const allJobs = await base44.entities.Job.list('-created_date', 200);
+            const allJobs = await base44.entities.Job.list('-created_date', 100);
             setJobs(allJobs);
         } catch (error) {
             toast.error('Failed to load jobs');
@@ -132,9 +130,6 @@ export default function History() {
         job.model_id?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
-    const visibleJobs = filteredJobs.slice(0, visibleCount);
-    const hasMore = filteredJobs.length > visibleCount;
-
     const selectedJob = jobs.find(j => j.id === selectedJobId);
 
     return (
@@ -187,7 +182,7 @@ export default function History() {
                             </Card>
                         ) : (
                             <div className="space-y-2">
-                                {visibleJobs.map((job) => {
+                                {filteredJobs.map((job) => {
                                     const status = statusConfig[job.status] || statusConfig.queued;
                                     const StatusIcon = status.icon;
                                     const isSelected = selectedJobId === job.id;
@@ -293,15 +288,6 @@ export default function History() {
                                         </Card>
                                     );
                                 })}
-                                {hasMore && (
-                                    <Button
-                                        variant="outline"
-                                        className="w-full"
-                                        onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
-                                    >
-                                        Show more ({filteredJobs.length - visibleCount} remaining)
-                                    </Button>
-                                )}
                             </div>
                         )}
                     </div>
