@@ -158,9 +158,10 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         ],
     };
 
-    // Thinking/reasoning models need more output tokens for chain-of-thought
+    // Thinking/reasoning models and Kimi K2 need more output tokens for chain-of-thought
     const isThinkingModel = stdId.includes('thinking') || stdId.includes('think');
-    const maxTokens = (isReasoningModel || isThinkingModel) ? 16384 : 4096;
+    const isKimiK2 = isKimiModel && (stdId.includes('k2') || stdId.includes('k-2'));
+    const maxTokens = (isReasoningModel || isThinkingModel || isKimiK2) ? 16384 : 4096;
 
     if (isReasoningModel) {
         body.max_completion_tokens = maxTokens;
