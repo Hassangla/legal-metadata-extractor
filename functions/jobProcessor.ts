@@ -143,12 +143,12 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
 
     // Standard Chat Completions path (no web search, Kimi search, Perplexity builtin, or fallback)
 
-    // O-series reasoning models (o1, o3, o4-mini, etc.) have parameter restrictions:
-    //   - No 'temperature' parameter
-    //   - Use 'max_completion_tokens' instead of 'max_tokens'
-    //   - No 'response_format' support
+    // Some models have parameter restrictions:
+    //   - O-series (o1, o3, o4): no temperature, use max_completion_tokens
+    //   - Kimi k-series: only temperature=1 is allowed
     const stdId = (modelId || '').toLowerCase();
     const isReasoningModel = /^(o1|o3|o4)/.test(stdId);
+    const isKimiModel = stdId.includes('kimi') || stdId.includes('moonshot');
 
     const body = {
         model: modelId,
@@ -162,7 +162,11 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         body.max_completion_tokens = 4096;
     } else {
         body.max_tokens = 4096;
-        body.temperature = 0;
+        if (isKimiModel) {
+            body.temperature = 1;
+        } else {
+            body.temperature = 0;
+        }
     }
 
     // Kimi server-side web search uses builtin_function tool in Chat Completions
