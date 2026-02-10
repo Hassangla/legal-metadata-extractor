@@ -158,10 +158,14 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         ],
     };
 
+    // Thinking/reasoning models need more output tokens for chain-of-thought
+    const isThinkingModel = stdId.includes('thinking') || stdId.includes('think');
+    const maxTokens = (isReasoningModel || isThinkingModel) ? 16384 : 4096;
+
     if (isReasoningModel) {
-        body.max_completion_tokens = 4096;
+        body.max_completion_tokens = maxTokens;
     } else {
-        body.max_tokens = 4096;
+        body.max_tokens = maxTokens;
         if (isKimiModel) {
             body.temperature = 1;
         } else {
@@ -577,7 +581,13 @@ Deno.serve(async (req) => {
 
                 let processedCount = 0;
 
+                // Helper to add delay between rows to avoid Base44 SDK rate limits
+                const interRowDelay = async () => {
+                    await new Promise(r => setTimeout(r, 500));
+                };
+
                 for (const row of pendingRows) {
+                    if (processedCount > 0) await interRowDelay();
                     try {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data || {};
@@ -888,6 +898,8 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                     }
                 }
 
+                // Brief delay before status aggregation to avoid rate limits
+                await new Promise(r => setTimeout(r, 300));
                 const updatedRows = await base44.entities.JobRow.filter({ job_id });
                 const doneCount  = updatedRows.filter((r) => r.status === 'done').length;
                 const errCount   = updatedRows.filter((r) => r.status === 'error').length;
@@ -922,7 +934,7 @@ Return a JSON object with EXACTLY this structure (no extra keys, no missing keys
                 }
 
                 await base44.entities.Job.update(job_id, updatePayload);
-
+                await new Promise(r => setTimeout(r, 200));
                 const updatedJobs = await base44.entities.Job.filter({ id: job_id });
                 return Response.json({
                     job: updatedJobs[0],
