@@ -410,7 +410,16 @@ Deno.serve(async (req) => {
                             ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
                             : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
 
-                        const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY. Always respond with valid JSON only — no markdown, no explanation, no code fences.\n\n${specText}`;
+                        const systemPrompt = `You are a legal-instrument metadata extraction and verification tool. Follow the specification below EXACTLY.
+
+CRITICAL OUTPUT RULES:
+- Respond with valid JSON ONLY.
+- Do NOT wrap your response in markdown code fences (\`\`\`json ... \`\`\`).
+- Do NOT include any explanation, commentary, or text before or after the JSON.
+- The response must start with { and end with }.
+- If you cannot find information for a field, leave it as an empty string "".
+
+${specText}`;
 
                         // Determine if we have REAL server-side web search
                         const hasRealWebSearch = job.web_search_choice
