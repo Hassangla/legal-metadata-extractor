@@ -280,6 +280,11 @@ export default function NewRun() {
                                         <p className="text-sm text-slate-500">
                                             Web Search: {selectedWebSearch === 'none' ? 'Disabled' : selectedWebSearch}
                                         </p>
+                                        {selectedWebSearch !== 'none' && (
+                                            <Badge className="bg-green-100 text-green-700 mt-1 text-[10px]">
+                                                <Search className="w-2.5 h-2.5 mr-0.5" />Verified search enabled
+                                            </Badge>
+                                        )}
                                     </div>
                                 </div>
 
