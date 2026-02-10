@@ -661,20 +661,18 @@ INSTRUCTIONS:
 5. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
 6. Record all evidence, URLs considered, tier, and reasoning.`;
                         } else {
-                            searchInstructions = `NOTE: Web search is NOT available for this request. Use your training knowledge and any information you know about this legal instrument to extract the metadata as accurately as possible.
+                            searchInstructions = `NOTE: Web search is NOT available for this request. Do NOT attempt to call any search tool.
 
-REFERENCE QUERIES (for context only — do NOT attempt to call any search tool):
+Because web search is unavailable, the TOOL-DEPENDENT fields cannot be verified. Leave the following fields as empty strings: Instrument_URL, Enactment_Date, Date_of_Entry_in_Force, Repeal_Year, Current_Status, Public.
+Set Flag to "No sources".
+In Missing_Conflict_Reason, note: "Web search tool not available — TOOL-DEPENDENT fields left blank per spec."
+
+You may still attempt to extract Language_Doc, Instrument_Full_Name_Original_Language, and Instrument_Published_Name if you are confident from the input data alone.
+
+REFERENCE QUERIES (for context only):
 1. ${query1}
 2. ${query2}
-3. ${query3}
-
-INSTRUCTIONS:
-1. Use your training knowledge to identify the legal instrument described above.
-2. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
-3. Determine Language_Doc, Enactment_Date, Date_of_Entry_in_Force, Current_Status based on your knowledge.
-4. For Instrument_Published_Name: if Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
-5. For any field you cannot verify without web search, leave it blank and explain in Missing_Conflict_Reason that web search was not available.
-6. Record your reasoning in the evidence fields. For URLs, provide the most likely official source URL if you know it, otherwise leave blank.`;
+3. ${query3}`;
                         }
 
                         const userPrompt = `Extract legal instrument metadata for this row.
