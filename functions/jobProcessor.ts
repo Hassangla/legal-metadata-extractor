@@ -1640,6 +1640,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
 
+                        // Diagnostic: log what we got from the LLM
+                        console.log(`[DIAG] row=${row.row_index} provider=${providerType} isResponsesApi=${isResponsesApi} contentLen=${(content||'').length} contentPreview=${(content||'').slice(0,200)}`);
+
                         // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
                         if (isKimiSearch && kimiObservedToolUrls.length > 0) {
