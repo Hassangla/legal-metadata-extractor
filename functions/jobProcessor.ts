@@ -51,6 +51,44 @@ function isWebSearchChoiceCompatible(providerType, webSearchChoice, modelId) {
     }
 }
 
+function normalizeWebSearchChoice(providerType, webSearchChoice, modelId) {
+    const requested = webSearchChoice || 'none';
+    if (requested === 'none') return 'none';
+    if (isWebSearchChoiceCompatible(providerType, requested, modelId)) return requested;
+
+    // Compatibility fallback for legacy jobs/connections that stored older option names.
+    switch (providerType) {
+        case 'openai':
+            return isOpenAIWebSearchModel(modelId) ? 'web_search_preview' : 'none';
+        case 'anthropic':
+            return 'web_search';
+        case 'google':
+            return 'google_search';
+        case 'perplexity':
+            return 'builtin';
+        case 'openai_compatible': {
+            const id = (modelId || '').toLowerCase();
+            const isKimi = id.includes('kimi') || id.includes('moonshot');
+            return isKimi ? 'kimi_web_search' : 'none';
+        }
+        default:
+            return 'none';
+    }
+}
+
+function detectProviderTypeFromUrl(baseUrl) {
+    const url = (baseUrl || '').toLowerCase().replace(/\/+$/, '');
+    if (url.includes('anthropic.com')) return 'anthropic';
+    if (url.includes('openai.azure.com')) return 'azure_openai';
+    if (url.includes('api.groq.com') || url.includes('groq.com')) return 'groq';
+    if (url.includes('together.xyz') || url.includes('together.ai')) return 'together';
+    if (url.includes('mistral.ai')) return 'mistral';
+    if (url.includes('perplexity.ai')) return 'perplexity';
+    if (url.includes('generativelanguage.googleapis.com')) return 'google';
+    if (url.includes('api.openai.com')) return 'openai';
+    return 'openai_compatible';
+}
+
 function isLikelyVagueLegalBasis(text) {
     const v = String(text || '').trim().toLowerCase();
     if (!v) return true;
@@ -1038,18 +1076,21 @@ Deno.serve(async (req) => {
 
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 const conn = connections[0];
-                
-                if (conn?.provider_type === 'openrouter') {
+
+                const resolvedProviderType = conn?.provider_type || detectProviderTypeFromUrl(conn?.base_url);
+                if (resolvedProviderType === 'openrouter') {
                     return Response.json({ error: 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.' }, { status: 400 });
                 }
                 
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 const model = models[0];
+                const requestedWebSearch = web_search_choice || 'none';
+                const normalizedWebSearch = normalizeWebSearchChoice(resolvedProviderType, requestedWebSearch, model_id);
 
                 const job = await base44.entities.Job.create({
                     connection_id,
                     model_id,
-                    web_search_choice: web_search_choice || 'none',
+                    web_search_choice: normalizedWebSearch,
                     spec_version_id: latestVersion.id,
                     status: 'queued',
                     input_file_url,
@@ -1059,7 +1100,7 @@ Deno.serve(async (req) => {
                     progress_json: { current_batch: 0, last_row_index: 0 },
                     connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
-                    provider_type: conn?.provider_type || 'openai_compatible',
+                    provider_type: resolvedProviderType || 'openai_compatible',
                     task_name: task_name || '',
                     total_input_tokens: 0,
                     total_output_tokens: 0,
@@ -1102,7 +1143,7 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
-                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
+                const providerType = conn.provider_type || detectProviderTypeFromUrl(conn.base_url) || job.provider_type || 'openai_compatible';
                 
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
@@ -1192,13 +1233,13 @@ Deno.serve(async (req) => {
                         const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none'
                             ? job.web_search_choice
                             : 'none';
-                        const searchChoiceCompatible = isWebSearchChoiceCompatible(
+                        const effectiveWebSearch = normalizeWebSearchChoice(
                             providerType,
                             requestedWebSearch,
                             job.model_id,
                         );
-                        const hasRealWebSearch = requestedWebSearch !== 'none' && searchChoiceCompatible;
-                        const effectiveWebSearch = hasRealWebSearch ? requestedWebSearch : 'none';
+                        const searchChoiceCompatible = effectiveWebSearch !== 'none';
+                        const hasRealWebSearch = effectiveWebSearch !== 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
                         // If web search is unavailable, we enforce blank fields server-side after the LLM call.
@@ -1371,6 +1412,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
                                 const hasToolCalls = toolCalls.length > 0;
                                 if (hasToolCalls) kimiObservedToolCalls = true;
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
 
                                 const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
                                 for (const u of loopUrls) {
