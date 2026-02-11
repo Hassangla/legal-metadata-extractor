@@ -719,6 +719,32 @@ async function verifyUrlLoads(url) {
     return false;
 }
 
+function extractEvidenceDerivedUrls(evidence) {
+    const urls = [];
+    const fields = ['URLs_Considered', 'Selected_Source_URLs', 'Final_Instrument_URL', 'Instrument_URL_Support'];
+    for (const f of fields) {
+        const val = evidence[f];
+        if (!val) continue;
+        if (typeof val === 'string') {
+            for (const u of extractUrlsFromText(val)) {
+                if (!urls.includes(u)) urls.push(u);
+            }
+        }
+    }
+    return urls;
+}
+
+async function verifyCandidateUrls(candidates, maxCheck) {
+    const verified = [];
+    const toCheck = candidates.slice(0, maxCheck || 8);
+    for (const url of toCheck) {
+        if (await verifyUrlLoads(url)) {
+            verified.push(url);
+        }
+    }
+    return verified;
+}
+
 function parseUrlList(raw) {
     if (!raw) return [];
     if (Array.isArray(raw)) return raw.map(u => u.trim()).filter(Boolean);
