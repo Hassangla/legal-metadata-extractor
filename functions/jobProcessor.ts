@@ -1636,7 +1636,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
                         // do one retry with an explicit instruction to call $web_search ──
                         if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
-                            && toolUrls.length === 0 && !toolError) {
+                            && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
                             try {
                                 const retryBodyObj = JSON.parse(init.body);
                                 // Remove previous conversation; send a fresh short prompt
