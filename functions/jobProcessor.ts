@@ -431,9 +431,39 @@ function extractJSON(content) {
 
 // ── TOOL URL EXTRACTION (provenance proof from provider response) ──
 
+function extractUrlsFromText(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    const matches = raw.match(/https?:\/\/[^\s)\]}>"'`]+/gi) || [];
+    return matches
+        .map((u) => u.replace(/[.,;:!?]+$/g, ''))
+        .filter((u) => u.startsWith('http'));
+}
+
+function collectUrlsDeep(value, out) {
+    if (!value) return;
+    if (typeof value === 'string') {
+        for (const u of extractUrlsFromText(value)) out.push(u);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const v of value) collectUrlsDeep(v, out);
+        return;
+    }
+    if (typeof value === 'object') {
+        for (const [k, v] of Object.entries(value)) {
+            const key = k.toLowerCase();
+            if ((key === 'url' || key === 'uri' || key === 'href' || key === 'link') && typeof v === 'string') {
+                out.push(v);
+                continue;
+            }
+            collectUrlsDeep(v, out);
+        }
+    }
+}
+
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     const urls = [];
-    // OpenAI Responses API: annotations on output_text parts
+    // OpenAI Responses API: annotations on output_text parts + web_search_call payloads
     if (isResponsesApi) {
         if (Array.isArray(data?.output)) {
             for (const item of data.output) {
@@ -446,8 +476,12 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                         }
                     }
                 }
+                if (item.type === 'web_search_call') {
+                    collectUrlsDeep(item, urls);
+                }
             }
         }
+        collectUrlsDeep(data?.citations, urls);
         return [...new Set(urls)];
     }
     // Anthropic: web_search_tool_result blocks
@@ -493,6 +527,17 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             }
         }
     }
+
+    // Kimi / OpenAI-compatible: capture URLs from tool call arguments and assistant text
+    if (Array.isArray(msg?.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+            collectUrlsDeep(tc.function?.arguments, urls);
+        }
+    }
+    if (typeof msg?.content === 'string') {
+        for (const u of extractUrlsFromText(msg.content)) urls.push(u);
+    }
+
     // Some OpenAI/compatible responses include top-level citations
     if (Array.isArray(data?.citations)) {
         for (const c of data.citations) {
@@ -501,6 +546,30 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
         }
     }
     return [...new Set(urls)];
+}
+
+function responseHasSearchSignal(providerType, data, isResponsesApi) {
+    if (!data || typeof data !== 'object') return false;
+
+    if (isResponsesApi) {
+        return Array.isArray(data.output) && data.output.some((item) => item?.type === 'web_search_call');
+    }
+
+    if (providerType === 'anthropic') {
+        return Array.isArray(data.content) && data.content.some((b) => b?.type === 'web_search_tool_result');
+    }
+
+    if (providerType === 'google') {
+        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        return Array.isArray(chunks) && chunks.length > 0;
+    }
+
+    if (providerType === 'perplexity') {
+        return Array.isArray(data.citations) && data.citations.length > 0;
+    }
+
+    const toolCalls = data?.choices?.[0]?.message?.tool_calls;
+    return Array.isArray(toolCalls) && toolCalls.length > 0;
 }
 
 function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
@@ -1268,6 +1337,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
+                        let kimiObservedToolUrls = [];
+                        let kimiObservedToolCalls = false;
+
                         if (isKimiSearch) {
                           try {
                             const bodyObj = JSON.parse(init.body);
@@ -1298,6 +1370,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 const textToolCalls = parseKimiToolCallsFromText(textContent);
                                 const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
                                 const hasToolCalls = toolCalls.length > 0;
+                                if (hasToolCalls) kimiObservedToolCalls = true;
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
 
                                 // If we have tool calls (regardless of finish_reason), echo them
                                 if (hasToolCalls && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop')) {
@@ -1405,8 +1483,15 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
+                        if (isKimiSearch && kimiObservedToolUrls.length > 0) {
+                            for (const u of kimiObservedToolUrls) {
+                                if (!toolUrls.includes(u)) toolUrls.push(u);
+                            }
+                        }
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
+                        const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
+                        const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
@@ -1441,8 +1526,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade search availability if tool silently failed or returned no URLs
-                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
+                        // Downgrade search availability if tool silently failed or returned no URLs.
+                        // Kimi can execute $web_search without exposing URL citations in every response,
+                        // so treat observed server-side tool calls as valid search execution.
+                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal))) {
                             searchActuallyWorked = false;
                         }
 
