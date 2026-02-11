@@ -1512,6 +1512,24 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 break;
                             }
 
+                            // Extract URLs from all tool result contents accumulated during the loop
+                            for (const content of kimiToolResultContents) {
+                                if (typeof content === 'string') {
+                                    const contentUrls = extractUrlsFromText(content);
+                                    for (const u of contentUrls) {
+                                        if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                    }
+                                    try {
+                                        const parsed = JSON.parse(content);
+                                        const deepUrls = [];
+                                        collectUrlsDeep(parsed, deepUrls);
+                                        for (const u of deepUrls) {
+                                            if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                        }
+                                    } catch (_) {}
+                                }
+                            }
+
                             // After the tool loop, check if the final response is narrative
                             // (not JSON). If so, do a follow-up call asking for JSON output.
                             const finalContent = extractTextContent(providerType, data, false);
