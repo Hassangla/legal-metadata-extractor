@@ -1798,17 +1798,23 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 parsed.evidence.URLs_Considered = urlsStr;
                             }
                             if (!(parsed.evidence.Selected_Source_URLs || '').trim()) {
-                                // Use all tool URLs as selected; the model didn't narrow them
                                 parsed.evidence.Selected_Source_URLs = urlsStr;
                             }
-                            // If Final_Instrument_URL is empty but we have tool URLs, try to use
-                            // the first one that matches any URL the model mentioned in text
                             if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
-                                // Check if the model mentioned any tool URL in its text content
-                                const contentText = content || '';
-                                const mentionedInContent = toolUrls.find(u => contentText.includes(u));
-                                if (mentionedInContent) {
-                                    parsed.evidence.Final_Instrument_URL = mentionedInContent;
+                                // Pick the best URL: prefer .gov / official-looking URLs first
+                                const govUrl = toolUrls.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                const legalDbUrl = toolUrls.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
+                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || toolUrls[0];
+                            }
+                            // If Source_Tier is empty, infer from the URL we selected
+                            if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
+                                const finalUrl = parsed.evidence.Final_Instrument_URL.toLowerCase();
+                                if (/\.gov|\.go\.|parliament|gazette|official|legislation/i.test(finalUrl)) {
+                                    parsed.evidence.Source_Tier = '1';
+                                } else if (/faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(finalUrl)) {
+                                    parsed.evidence.Source_Tier = '2';
+                                } else {
+                                    parsed.evidence.Source_Tier = '3';
                                 }
                             }
                         }
