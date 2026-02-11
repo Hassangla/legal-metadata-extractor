@@ -788,6 +788,122 @@ function urlInList(url, list) {
     return items.some(item => item.replace(/\/+$/, '').toLowerCase() === normalized);
 }
 
+const ARTICLE_REFERENCE_REGEXES = [
+    /\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,
+    /\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,
+    /\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi,
+];
+
+const INLINE_DATE_REGEXES = [
+    /,?\s*(?:dated\s+)?\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/gi,
+    /,?\s*(?:de\s+)?\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+(?:\s+de\s+\d{4})?/gi,
+    /,?\s*(?:du\s+)?\d{1,2}\s+[A-Za-zÀ-ÿ]+\s+\d{4}/gi,
+    /,?\s*(?:of\s+)?\d{1,2}\s+[A-Za-z]+\s+\d{4}/gi,
+];
+
+function stripTitleNoise(title) {
+    if (!title) return title;
+    let cleaned = String(title);
+
+    // remove parentheticals / acronyms
+    cleaned = cleaned.replace(/\s*\([^)]*\)/g, '');
+
+    // remove article references
+    for (const rx of ARTICLE_REFERENCE_REGEXES) {
+        cleaned = cleaned.replace(rx, '');
+    }
+
+    // remove leading connectors left by removed segments
+    cleaned = cleaned
+        .replace(/\s*[,;:]\s*/g, ' ')
+        .replace(/\b(?:and|y|e|et|und|و)\b\s*$/i, '');
+
+    // remove country names / inflationary prefixes
+    cleaned = cleaned
+        .replace(/\b(?:Republic of|Kingdom of|State of|Government of|Law of the|Act of the|Decree of the)\b/gi, '')
+        .replace(/^\s*the\s+/i, '');
+
+    // normalize No format
+    cleaned = cleaned
+        .replace(/\b(?:Nº|N°|No|Number|Num\.?|№)\s*[:\-]?\s*/gi, 'No. ')
+        .replace(/\bNo\.\s*No\.\s*/g, 'No. ');
+
+    // collapse whitespace & punctuation repeats
+    cleaned = cleaned
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+([,.;:])/g, '$1')
+        .trim();
+
+    return cleaned;
+}
+
+function normalizeTitleForSpec(rawTitle) {
+    const notes = [];
+    const original = String(rawTitle || '').trim();
+    if (!original) return { title: '', notes };
+
+    let title = stripTitleNoise(original);
+
+    const hasLawNumber = /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi)\b[^\n]*\bNo\.\s*[A-Za-z0-9./\-]+/i.test(title)
+        || /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi)\b[^\n]*\b\d+[A-Za-z0-9./\-]*/i.test(title);
+
+    if (hasLawNumber) {
+        const beforeDate = title;
+        for (const rx of INLINE_DATE_REGEXES) {
+            title = title.replace(rx, '');
+        }
+        if (title !== beforeDate) {
+            notes.push('Removed inline date phrase because instrument number already identifies the title.');
+        }
+    }
+
+    const upperRatio = original.replace(/[^A-Za-z]/g, '').length > 0
+        ? (original.replace(/[^A-Z]/g, '').length / original.replace(/[^A-Za-z]/g, '').length)
+        : 0;
+    if (upperRatio > 0.85) {
+        title = title
+            .toLowerCase()
+            .replace(/\b\w/g, (c) => c.toUpperCase());
+        notes.push('Normalized capitalization from all-caps style.');
+    }
+
+    title = title
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+,/g, ',')
+        .trim();
+
+    if (title !== original) {
+        notes.unshift('Normalized title to remove parentheticals/article references/non-essential phrasing and standardize numbering as "No.".');
+    }
+
+    return { title, notes };
+}
+
+function normalizeLanguageDoc(rawLanguage) {
+    const val = String(rawLanguage || '').trim();
+    if (!val) return '';
+    const lower = val.toLowerCase();
+
+    if ((/pashto/.test(lower) && /dari/.test(lower)) || /\b(dari\s*\/\s*pashto|pashto\s*\/\s*dari)\b/i.test(val)) {
+        return 'Pashto / Dari';
+    }
+
+    const map = {
+        arabic: 'Arabic',
+        french: 'French',
+        spanish: 'Spanish',
+        pashto: 'Pashto',
+        dari: 'Dari',
+    };
+    if (map[lower]) return map[lower];
+
+    return val
+        .toLowerCase()
+        .split(/\s+/)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+}
+
 // ── FINALIZE AND VERIFY (spec enforcement) ──────────────────
 
 async function finalizeAndVerify(ev, ctx) {
@@ -930,13 +1046,38 @@ async function finalizeAndVerify(ev, ctx) {
         addReason('Web search enabled, but no tool-returned URLs were observed server-side; ignoring model-typed URLs. Treating as No sources per spec.');
     }
 
-    // ── (F) NO-ORPHAN promotion: promote Evidence candidates into blank Final_* fields ──
-    // Only promote fields that are NOT tool-dependent when search is unavailable.
-    // Title and language fields can be promoted regardless of search availability.
-    const normalizedTitle = (ev.Normalized_Title_Used || '').trim();
+    // ── (F) Evidence normalization and NO-ORPHAN promotion ──
     const rawTitle = (ev.Raw_Official_Title_As_Source || '').trim();
+    const providedNormalizedTitle = (ev.Normalized_Title_Used || '').trim();
     const langJustification = (ev.Language_Justification || '').trim();
-    const candidateTitle = normalizedTitle || rawTitle;
+
+    // Language normalization: enforce English language names and bilingual format Pashto / Dari
+    const languageBefore = ev.Final_Language_Doc || '';
+    const normalizedLanguage = normalizeLanguageDoc(languageBefore);
+    if (normalizedLanguage && normalizedLanguage !== languageBefore) {
+        ev.Final_Language_Doc = normalizedLanguage;
+        addReason(`Language normalized to "${normalizedLanguage}" (English language-name format).`);
+    }
+
+    // Title normalization rules apply to both Raw/Normalized output title fields as applicable.
+    const titleSeed = providedNormalizedTitle || rawTitle;
+    if (titleSeed) {
+        const normalized = normalizeTitleForSpec(titleSeed);
+        if (!providedNormalizedTitle || normalized.title !== providedNormalizedTitle) {
+            ev.Normalized_Title_Used = normalized.title;
+        }
+
+        if (!ev.Raw_Official_Title_As_Source && normalized.title) {
+            ev.Raw_Official_Title_As_Source = titleSeed;
+        }
+
+        if (normalized.notes.length > 0) {
+            const prev = ev.Normalization_Notes ? `${ev.Normalization_Notes}; ` : '';
+            ev.Normalization_Notes = `${prev}${normalized.notes.join(' ')}`.trim();
+        }
+    }
+
+    const candidateTitle = (ev.Normalized_Title_Used || rawTitle || '').trim();
 
     if (!(ev.Final_Instrument_Full_Name_Original_Language || '').trim() && candidateTitle) {
         ev.Final_Instrument_Full_Name_Original_Language = candidateTitle;
@@ -956,11 +1097,16 @@ async function finalizeAndVerify(ev, ctx) {
     }
 
     if (!(ev.Final_Language_Doc || '').trim() && langJustification) {
-        // Light-touch extraction: look for a clear single language name
-        const langMatch = langJustification.match(/\b(Arabic|French|Spanish|Portuguese|Chinese|Japanese|Korean|Russian|German|Italian|Dutch|Turkish|Thai|Hindi|Urdu|Malay|Indonesian|Vietnamese|Slovenian|Croatian|Serbian|Czech|Slovak|Polish|Hungarian|Romanian|Bulgarian|Greek|Hebrew|Farsi|Persian|Dari|Pashto|Swahili|Amharic|Tigrinya|Khmer|Lao|Burmese|Georgian|Armenian|Azerbaijani|Uzbek|Kazakh|Kyrgyz|Tajik|Mongolian|Nepali|Bengali|Sinhala|Tamil|Telugu|Kannada|Malayalam|Gujarati|Marathi|Punjabi|English)\b/i);
-        if (langMatch) {
-            ev.Final_Language_Doc = langMatch[1].charAt(0).toUpperCase() + langMatch[1].slice(1).toLowerCase();
-            addReason(`NO-ORPHAN: Extracted language "${ev.Final_Language_Doc}" from Language_Justification.`);
+        // Light-touch extraction: look for clear language mention(s)
+        if (/pashto/i.test(langJustification) && /dari/i.test(langJustification)) {
+            ev.Final_Language_Doc = 'Pashto / Dari';
+            addReason('NO-ORPHAN: Extracted bilingual language "Pashto / Dari" from Language_Justification.');
+        } else {
+            const langMatch = langJustification.match(/\b(Arabic|French|Spanish|Portuguese|Chinese|Japanese|Korean|Russian|German|Italian|Dutch|Turkish|Thai|Hindi|Urdu|Malay|Indonesian|Vietnamese|Slovenian|Croatian|Serbian|Czech|Slovak|Polish|Hungarian|Romanian|Bulgarian|Greek|Hebrew|Farsi|Persian|Dari|Pashto|Swahili|Amharic|Tigrinya|Khmer|Lao|Burmese|Georgian|Armenian|Azerbaijani|Uzbek|Kazakh|Kyrgyz|Tajik|Mongolian|Nepali|Bengali|Sinhala|Tamil|Telugu|Kannada|Malayalam|Gujarati|Marathi|Punjabi|English)\b/i);
+            if (langMatch) {
+                ev.Final_Language_Doc = langMatch[1].charAt(0).toUpperCase() + langMatch[1].slice(1).toLowerCase();
+                addReason(`NO-ORPHAN: Extracted language "${ev.Final_Language_Doc}" from Language_Justification.`);
+            }
         }
     }
 
