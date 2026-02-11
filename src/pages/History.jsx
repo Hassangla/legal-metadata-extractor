@@ -220,7 +220,7 @@ export default function History() {
                                                                 <p className="text-xs text-slate-400">{job.input_file_name}</p>
                                                             )}
                                                             <p className="text-sm text-slate-500">
-                                                                {format(new Date(job.created_date), 'MMM d, yyyy HH:mm')}
+                                                                {formatDCTime(job.created_date)}
                                                             </p>
                                                         </div>
                                                     </div>

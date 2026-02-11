@@ -222,7 +222,7 @@ export default function Dashboard() {
                                                         {job.input_file_name || 'Untitled Job'}
                                                     </p>
                                                     <p className="text-sm text-slate-500">
-                                                        {format(new Date(job.created_date), 'MMM d, yyyy HH:mm')}
+                                                        {formatDCTime(job.created_date)}
                                                     </p>
                                                 </div>
                                             </div>
