@@ -736,9 +736,6 @@ function urlInList(url, list) {
 
 async function finalizeAndVerify(ev, ctx) {
     const notes = [];
-    const tierRaw = String(ev.Source_Tier || ev.Tier || '').trim();
-    const tierNum = parseInt(tierRaw, 10);
-    const isTier5 = tierNum === 5;
 
     // Helper to append to Missing_Conflict_Reason
     const addReason = (msg) => notes.push(msg);
@@ -769,7 +766,9 @@ async function finalizeAndVerify(ev, ctx) {
     }
 
     // ── (D) Tier 5 restrictions ──
-    if (isTier5) {
+    const tierRaw = String(ev.Source_Tier || ev.Tier || '').trim();
+    const tierNum = parseInt(tierRaw, 10);
+    if (tierNum === 5) {
         const tier5Blanked = [
             'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
             'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public',
@@ -844,7 +843,7 @@ async function finalizeAndVerify(ev, ctx) {
                 }
             }
 
-            if (!found && !isTier5) {
+            if (!found) {
                 ev.Final_Public = 'No';
                 const accessNote = `URL "${ev.Final_Instrument_URL}" failed to load (verify-it-loads check).`;
                 const prevAccess = ev.Public_Access || '';
@@ -852,16 +851,6 @@ async function finalizeAndVerify(ev, ctx) {
                 addReason(accessNote + ' Final_Public set to "No".');
             }
         }
-    }
-
-    // Tier 5 hard-stop enforcement (run again at the end to prevent later steps from repopulating restricted fields)
-    if (isTier5) {
-        ev.Final_Enactment_Date = '';
-        ev.Final_Date_of_Entry_in_Force = '';
-        ev.Final_Repeal_Year = '';
-        ev.Final_Current_Status = '';
-        ev.Final_Public = '';
-        ev.Final_Flag = 'Tier 5';
     }
 
     // ── (C2) SILENT TOOL FAILURE: web search enabled but no tool URLs observed ──
@@ -1677,7 +1666,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     Economy_Code: economyCode,
                                     Legal_basis_verbatim: legalBasis,
                                     Query_1: query1, Query_2: query2, Query_3: query3,
-                                    URLs_Considered: extractHttpUrlsFromText(content || '').join('; '),
+                                    URLs_Considered: '',
                                     Selected_Source_URLs: '',
                                     Source_Tier: '',
                                     Public_Access: '',
