@@ -29,6 +29,51 @@ const SERVER_SIDE_SEARCH = new Set([
     'kimi_web_search',     // Kimi/Moonshot — server-side builtin_function (echo-loop protocol)
 ]);
 
+function isWebSearchChoiceCompatible(providerType, webSearchChoice, modelId) {
+    if (!webSearchChoice || webSearchChoice === 'none') return true;
+
+    switch (providerType) {
+        case 'anthropic':
+            return webSearchChoice === 'web_search';
+        case 'google':
+            return webSearchChoice === 'google_search';
+        case 'perplexity':
+            return webSearchChoice === 'builtin';
+        case 'openai':
+            return webSearchChoice === 'web_search_preview' && isOpenAIWebSearchModel(modelId);
+        case 'openai_compatible': {
+            const id = (modelId || '').toLowerCase();
+            const isKimi = id.includes('kimi') || id.includes('moonshot');
+            return webSearchChoice === 'kimi_web_search' && isKimi;
+        }
+        default:
+            return false;
+    }
+}
+
+function isLikelyVagueLegalBasis(text) {
+    const v = String(text || '').trim().toLowerCase();
+    if (!v) return true;
+    if (v.length < 12) return true;
+    const vagueMarkers = [
+        'law', 'act', 'code', 'decree', 'regulation', 'ordinance', 'legislation',
+        'legal basis', 'relevant law', 'applicable law', 'n/a', 'na', 'unknown',
+    ];
+    const hasMarker = vagueMarkers.some(m => v === m || v.includes(m));
+    const hasNumber = /\b(no\.?\s*\d+|\d{2,4}[\/\-]\d{1,3}|\d{3,})\b/i.test(v);
+    return hasMarker && !hasNumber;
+}
+
+function normalizeRowFlag(sourceTierRaw, hasSources) {
+    const t = parseInt(String(sourceTierRaw || '').trim(), 10);
+    if (!hasSources || !Number.isFinite(t)) return 'No sources';
+    if (t <= 2) return '';
+    if (t === 3) return 'Tier 3';
+    if (t === 4) return 'Tier 4';
+    if (t >= 5) return 'Tier 5';
+    return 'No sources';
+}
+
 // ── KIMI EMBEDDED TOOL-CALL PARSER ─────────────────────────
 // Kimi thinking models sometimes embed tool calls as special tokens
 // inside the assistant content instead of returning structured tool_calls.
@@ -411,6 +456,12 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
                 for (const item of block.content) { if (item.url) urls.push(item.url); }
             }
+            // Some Anthropic responses emit citations on text blocks
+            if (Array.isArray(block?.citations)) {
+                for (const c of block.citations) {
+                    if (c?.url) urls.push(c.url);
+                }
+            }
         }
         return [...new Set(urls)];
     }
@@ -428,6 +479,11 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     }
     // OpenAI Chat Completions web_search_preview: content may be array with url_citation annotations
     const msg = data?.choices?.[0]?.message;
+    if (Array.isArray(msg?.annotations)) {
+        for (const ann of msg.annotations) {
+            if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
+        }
+    }
     if (msg && Array.isArray(msg.content)) {
         for (const part of msg.content) {
             if (part.annotations && Array.isArray(part.annotations)) {
@@ -435,6 +491,13 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                     if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
                 }
             }
+        }
+    }
+    // Some OpenAI/compatible responses include top-level citations
+    if (Array.isArray(data?.citations)) {
+        for (const c of data.citations) {
+            if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
+            if (c?.url && typeof c.url === 'string') urls.push(c.url);
         }
     }
     return [...new Set(urls)];
@@ -579,7 +642,14 @@ async function finalizeAndVerify(ev, ctx) {
         }
         ev.Final_Flag = 'No sources';
         if (ctx.searchWasRequested && !ctx.hasRealWebSearch) {
-            addReason('Web search requested but no tool URLs were returned; treated as No sources.');
+            if (ctx.searchChoiceCompatible === false) {
+                addReason(
+                    `Web search was requested (${ctx.requestedWebSearch || 'unknown'}) but is incompatible with provider/model ` +
+                    `(${ctx.providerType || 'unknown'}/${ctx.modelId || 'unknown'}). Treated as No sources.`
+                );
+            } else {
+                addReason('Web search requested but no tool URLs were returned; treated as No sources.');
+            }
         } else {
             addReason('Web search tool not available — TOOL-DEPENDENT fields blanked server-side per spec.');
         }
@@ -591,7 +661,7 @@ async function finalizeAndVerify(ev, ctx) {
     if (tierNum === 5) {
         const tier5Blanked = [
             'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
-            'Final_Repeal_Year', 'Final_Current_Status',
+            'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public',
         ];
         for (const f of tier5Blanked) {
             ev[f] = '';
@@ -633,6 +703,9 @@ async function finalizeAndVerify(ev, ctx) {
     // ── (B) MINIMUM VERIFICATION — verify the URL loads ──
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const loads = await verifyUrlLoads(ev.Final_Instrument_URL);
+        if (loads) {
+            ev.Final_Public = 'Yes';
+        }
         if (!loads) {
             // Try alternate URLs from Selected_Source_URLs
             const alternates = parseUrlList(ev.Selected_Source_URLs)
@@ -709,6 +782,20 @@ async function finalizeAndVerify(ev, ctx) {
             addReason(`NO-ORPHAN: Extracted language "${ev.Final_Language_Doc}" from Language_Justification.`);
         }
     }
+
+    const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
+    const q2 = String(ev.Query_2 || '').trim();
+    const q3 = String(ev.Query_3 || '').trim();
+    const nonLatin = /[^\x00-\x7F]/;
+    if (ctx.hasRealWebSearch && langDoc && langDoc !== 'english') {
+        const hasMultilingualQuery = nonLatin.test(q2) || nonLatin.test(q3);
+        if (!hasMultilingualQuery) {
+            addReason('Multilingual-search rule likely not met: Query_2/Query_3 appear English-only for a non-English document language.');
+        }
+    }
+
+    const hasUsableSource = ctx.hasRealWebSearch && !!(ev.Final_Instrument_URL || ev.Selected_Source_URLs || ev.URLs_Considered);
+    ev.Final_Flag = normalizeRowFlag(ev.Source_Tier || ev.Tier, hasUsableSource);
 
     // ── Inject server-side canonical values ──
     ev.Row_Index = ctx.row_index;
@@ -1019,32 +1106,30 @@ Deno.serve(async (req) => {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data || {};
                         const rawEconomy = (input.Economy || '').toLowerCase().trim();
+                        const aliasFallbackEnabled = (Deno.env.get('ENABLE_ECONOMY_ALIAS_FALLBACK') || '').toLowerCase() === 'true';
                         const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
-                        const economyCode = economyMap[resolvedEconomy] || economyMap[rawEconomy] || '';
+                        const economyCode = economyMap[rawEconomy] || (aliasFallbackEnabled ? (economyMap[resolvedEconomy] || '') : '');
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
                         const query1 = `"${legalBasis}" "${input.Economy}" (law OR act OR code OR decree OR regulation)`;
                         const query2 = `"${legalBasis}" "${input.Economy}" (official gazette OR ministry of justice OR parliament OR government)`;
-                        const query3 = legalBasis
-                            ? `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
-                            : `"${input.Topic}" "${input.Economy}" "${input.Question}" legal instrument`;
+                        const vagueLegalBasis = isLikelyVagueLegalBasis(legalBasis);
+                        const query3 = vagueLegalBasis
+                            ? `"${legalBasis || input.Topic || ''}" "${input.Economy}" "${input.Topic || ''}" "${input.Question || ''}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`
+                            : `"${legalBasis}" "${input.Economy}" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")`;
 
-                        // Determine if we have REAL server-side web search.
-                        // For OpenAI, additionally gate on the web search model allowlist.
-                        let hasRealWebSearch = job.web_search_choice
-                            && job.web_search_choice !== 'none'
-                            && SERVER_SIDE_SEARCH.has(job.web_search_choice);
-
-                        // OpenAI-specific: only allowlisted models can actually use web search
-                        if (hasRealWebSearch && providerType === 'openai' && job.web_search_choice === 'web_search_preview') {
-                            if (!isOpenAIWebSearchModel(job.model_id)) {
-                                hasRealWebSearch = false;
-                            }
-                        }
-
-                        // If user selected a non-server-side search tool, fall back to no search
-                        const effectiveWebSearch = hasRealWebSearch ? job.web_search_choice : 'none';
+                        // Determine if requested web search mode is actually compatible with this provider/model.
+                        const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none'
+                            ? job.web_search_choice
+                            : 'none';
+                        const searchChoiceCompatible = isWebSearchChoiceCompatible(
+                            providerType,
+                            requestedWebSearch,
+                            job.model_id,
+                        );
+                        const hasRealWebSearch = requestedWebSearch !== 'none' && searchChoiceCompatible;
+                        const effectiveWebSearch = hasRealWebSearch ? requestedWebSearch : 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
                         // If web search is unavailable, we enforce blank fields server-side after the LLM call.
@@ -1321,11 +1406,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
-                        const searchWasRequested = hasRealWebSearch; // remember original intent
+                        const searchWasRequested = requestedWebSearch !== 'none';
+                        let searchActuallyWorked = hasRealWebSearch;
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
                         // do one retry with an explicit instruction to call $web_search ──
-                        if (searchWasRequested && effectiveWebSearch === 'kimi_web_search'
+                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
                             && toolUrls.length === 0 && !toolError) {
                             try {
                                 const retryBodyObj = JSON.parse(init.body);
@@ -1355,9 +1441,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade hasRealWebSearch if tool silently failed or returned no URLs
-                        if (hasRealWebSearch && (toolError || toolUrls.length === 0)) {
-                            hasRealWebSearch = false;
+                        // Downgrade search availability if tool silently failed or returned no URLs
+                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
+                            searchActuallyWorked = false;
                         }
 
                         let parsed = extractJSON(content);
@@ -1468,13 +1554,17 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
                         const ev = await finalizeAndVerify(parsed.evidence, {
-                            hasRealWebSearch,
+                            hasRealWebSearch: searchActuallyWorked,
                             searchWasRequested,
                             toolUrls,
                             row_index: row.row_index,
                             economy: input.Economy,
                             economyCode,
                             legalBasis,
+                            requestedWebSearch,
+                            searchChoiceCompatible,
+                            providerType,
+                            modelId: job.model_id,
                         });
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
