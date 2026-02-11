@@ -51,7 +51,7 @@ Row-level: use the worst (highest number) tier of any populated Final_* value.
 
 ## SECTION: Search Strategy (Per Row)
 When web search is available: Run up to 3 search attempts. Stop early only if Tier 1-2 clearly support needed fields. Record all queries and top URLs in Evidence.
-When web search is NOT available: Leave ALL TOOL-DEPENDENT fields blank. Set Final_Flag="No sources". Record "Web search tool not available — TOOL-DEPENDENT fields left blank per spec" in Missing_Conflict_Reason. You may still attempt Final_Language_Doc, Final_Instrument_Full_Name_Original_Language, and Final_Instrument_Published_Name if confident from input data alone.
+When web search is NOT available: Leave ALL TOOL-DEPENDENT fields blank. Set Final_Flag="No sources". Record "Web search tool not available — TOOL-DEPENDENT fields left blank per spec" in Missing_Conflict_Reason. Do NOT use training knowledge to guess, invent, or fabricate URLs, dates, or legal status. You may still attempt Final_Language_Doc, Final_Instrument_Full_Name_Original_Language, and Final_Instrument_Published_Name if confident from input data alone.
 Query_1: "<Legal basis>" "<Economy>" (law OR act OR code OR decree OR regulation) — run in English.
 Query_2: "<Legal basis>" "<Economy>" (official gazette OR ministry of justice OR parliament OR government)
 Query_3: "<Legal basis>" "<Economy>" ("Law No" OR "Act No" OR "Decree No" OR "gazette" OR "promulgated" OR "entered into force")

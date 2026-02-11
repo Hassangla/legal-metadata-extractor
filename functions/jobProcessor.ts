@@ -237,7 +237,8 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
     // Kimi server-side web search uses builtin_function tool in Chat Completions
     if (webSearchChoice === 'kimi_web_search') {
         body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
-        body.tool_choice = 'auto';
+        // Force tool use so Kimi actually calls $web_search instead of skipping it
+        body.tool_choice = { type: 'builtin_function', function: { name: '$web_search' } };
         // K2.5 thinking models break $web_search; disable thinking to use Instant mode
         if (/k2\.?5/i.test(modelId)) {
             body.thinking = { type: 'disabled' };
@@ -466,12 +467,16 @@ function isSafeHttpUrl(urlStr) {
     // Reject localhost and .local
     if (hostname === 'localhost' || hostname.endsWith('.local')) return false;
 
-    // Reject literal private/reserved IPs
-    // Split IPv4; also handle IPv6 [::1] etc.
+    // Reject IPv6 loopback and private ranges
     if (hostname === '[::1]' || hostname === '::1') return false;
+    // fc00::/7 (unique local) and fe80::/10 (link-local)
+    const ipv6Bare = hostname.replace(/^\[|\]$/g, '');
+    if (/^f[cd]/i.test(ipv6Bare) || /^fe[89ab]/i.test(ipv6Bare)) return false;
+
+    // Reject literal private/reserved IPv4
     const ipMatch = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (ipMatch) {
-        const [, a, b, c] = ipMatch.map(Number);
+        const [, a, b] = ipMatch.map(Number);
         if (a === 127) return false;                       // 127.0.0.0/8
         if (a === 10) return false;                        // 10.0.0.0/8
         if (a === 172 && b >= 16 && b <= 31) return false; // 172.16.0.0/12
@@ -490,7 +495,7 @@ async function verifyUrlLoads(url) {
     const TIMEOUT_MS = 8000;
 
     // Inner fetch that manually follows redirects with safety checks
-    async function safeFetch(targetUrl, method, extraHeaders) {
+    async function safeFetchVerify(targetUrl, method, extraHeaders) {
         let current = targetUrl;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
             if (!isSafeHttpUrl(current)) return null;
@@ -501,7 +506,10 @@ async function verifyUrlLoads(url) {
             try {
                 resp = await fetch(current, {
                     method,
-                    headers: extraHeaders || {},
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; LegalMetadataBot/1.0)',
+                        ...(extraHeaders || {}),
+                    },
                     signal: controller.signal,
                     redirect: 'manual',
                 });
@@ -515,7 +523,6 @@ async function verifyUrlLoads(url) {
             if (resp.status >= 300 && resp.status < 400) {
                 const location = resp.headers.get('location');
                 if (!location) return null;
-                // Resolve relative redirects
                 try { current = new URL(location, current).href; } catch (_) { return null; }
                 continue;
             }
@@ -525,14 +532,14 @@ async function verifyUrlLoads(url) {
         return null; // exceeded max redirects
     }
 
-    // 1) Try HEAD first
-    let resp = await safeFetch(url, 'HEAD');
+    // 1) Try GET with Range header first (HEAD is often blocked by government sites)
+    let resp = await safeFetchVerify(url, 'GET', { 'Range': 'bytes=0-2048' });
     if (resp && resp.status >= 200 && resp.status < 400) return true;
 
-    // 2) If HEAD failed (403/405/404 or network error), fallback to GET with Range header
-    const headStatus = resp?.status;
-    if (!resp || headStatus === 403 || headStatus === 405 || headStatus === 404) {
-        resp = await safeFetch(url, 'GET', { 'Range': 'bytes=0-2048' });
+    // 2) Fallback to HEAD if ranged GET failed
+    const getStatus = resp?.status;
+    if (!resp || getStatus === 403 || getStatus === 405 || getStatus === 404 || getStatus >= 500) {
+        resp = await safeFetchVerify(url, 'HEAD');
         if (resp && resp.status >= 200 && resp.status < 400) return true;
     }
 
@@ -656,6 +663,50 @@ async function finalizeAndVerify(ev, ctx) {
                 ev.Public_Access = [prevAccess, accessNote].filter(Boolean).join('; ');
                 addReason(accessNote + ' Final_Public set to "No".');
             }
+        }
+    }
+
+    // ── (C2) SILENT TOOL FAILURE: web search enabled but no tool URLs observed ──
+    // If the provider was supposed to search but returned zero tool URLs,
+    // the model may have fabricated URLs in text. Blank Evidence URL fields
+    // to prevent misleading spreadsheet output.
+    if (ctx.searchWasRequested && !ctx.hasRealWebSearch && ctx.toolUrls && ctx.toolUrls.length === 0) {
+        ev.URLs_Considered = '';
+        ev.Selected_Source_URLs = '';
+        addReason('Web search enabled, but no tool-returned URLs were observed server-side; ignoring model-typed URLs. Treating as No sources per spec.');
+    }
+
+    // ── (F) NO-ORPHAN promotion: promote Evidence candidates into blank Final_* fields ──
+    // Only promote fields that are NOT tool-dependent when search is unavailable.
+    // Title and language fields can be promoted regardless of search availability.
+    const normalizedTitle = (ev.Normalized_Title_Used || '').trim();
+    const rawTitle = (ev.Raw_Official_Title_As_Source || '').trim();
+    const langJustification = (ev.Language_Justification || '').trim();
+    const candidateTitle = normalizedTitle || rawTitle;
+
+    if (!(ev.Final_Instrument_Full_Name_Original_Language || '').trim() && candidateTitle) {
+        ev.Final_Instrument_Full_Name_Original_Language = candidateTitle;
+        addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Full_Name_Original_Language from Evidence.`);
+    }
+
+    if (!(ev.Final_Instrument_Published_Name || '').trim() && candidateTitle) {
+        // For French/Spanish docs, keep original title; otherwise use candidate as-is
+        const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
+        if (langDoc === 'french' || langDoc === 'spanish') {
+            ev.Final_Instrument_Published_Name = candidateTitle;
+            addReason(`NO-ORPHAN: Promoted original-language title into Final_Instrument_Published_Name (${langDoc} — kept as-is per spec).`);
+        } else if (candidateTitle) {
+            ev.Final_Instrument_Published_Name = candidateTitle;
+            addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Published_Name from Evidence.`);
+        }
+    }
+
+    if (!(ev.Final_Language_Doc || '').trim() && langJustification) {
+        // Light-touch extraction: look for a clear single language name
+        const langMatch = langJustification.match(/\b(Arabic|French|Spanish|Portuguese|Chinese|Japanese|Korean|Russian|German|Italian|Dutch|Turkish|Thai|Hindi|Urdu|Malay|Indonesian|Vietnamese|Slovenian|Croatian|Serbian|Czech|Slovak|Polish|Hungarian|Romanian|Bulgarian|Greek|Hebrew|Farsi|Persian|Dari|Pashto|Swahili|Amharic|Tigrinya|Khmer|Lao|Burmese|Georgian|Armenian|Azerbaijani|Uzbek|Kazakh|Kyrgyz|Tajik|Mongolian|Nepali|Bengali|Sinhala|Tamil|Telugu|Kannada|Malayalam|Gujarati|Marathi|Punjabi|English)\b/i);
+        if (langMatch) {
+            ev.Final_Language_Doc = langMatch[1].charAt(0).toUpperCase() + langMatch[1].slice(1).toLowerCase();
+            addReason(`NO-ORPHAN: Extracted language "${ev.Final_Language_Doc}" from Language_Justification.`);
         }
     }
 
@@ -1029,15 +1080,17 @@ ${specText}`;
 
 MANDATORY MULTILINGUAL SEARCH PROTOCOL:
 - Query_1 MUST be in English: ${query1}
-- At least ONE of Query_2 or Query_3 MUST be rewritten and executed in the official/original language/script of the economy or instrument, translating legal terms and using the local instrument title if known.
+- At least ONE of Query_2 or Query_3 MUST be rewritten and executed in the official/original language/script of the economy or instrument, translating legal terms and using the local instrument title if known. This is NOT optional — failure to search in the local language often misses the primary legal instrument.
 - Default English versions (rewrite at least one in local language):
   Query_2: ${query2}
   Query_3: ${query3}
 
 Examples of required multilingual queries:
-- Syria nationality law → Arabic: "قانون الجنسية السوري" "المرسوم التشريعي رقم 276 لعام 1969"
-- Slovenia Agricultural Land Act → Slovenian: "Zakon o kmetijskih zemljiščih"
-- Japan Companies Act → Japanese: "会社法"
+- Syria, nationality law → Arabic: "قانون الجنسية السوري" "المرسوم التشريعي رقم 276 لعام 1969"
+- Slovenia, Agricultural Land Act → Slovenian: "Zakon o kmetijskih zemljiščih"
+- Japan, Companies Act → Japanese: "会社法"
+- Thailand, Nationality Act → Thai: "พระราชบัญญัติสัญชาติ"
+- Brazil, Civil Code → Portuguese: "Código Civil" "Lei nº 10.406"
 Record the actual multilingual query string you used in the Query_2 or Query_3 evidence field.
 
 INSTRUCTIONS:
@@ -1269,6 +1322,38 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = hasRealWebSearch; // remember original intent
+
+                        // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
+                        // do one retry with an explicit instruction to call $web_search ──
+                        if (searchWasRequested && effectiveWebSearch === 'kimi_web_search'
+                            && toolUrls.length === 0 && !toolError) {
+                            try {
+                                const retryBodyObj = JSON.parse(init.body);
+                                // Remove previous conversation; send a fresh short prompt
+                                retryBodyObj.messages = [
+                                    { role: 'system', content: 'You MUST use the $web_search tool. Call it now.' },
+                                    { role: 'user', content: `Search the web using $web_search for: ${query1}` },
+                                ];
+                                retryBodyObj.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
+                                retryBodyObj.tool_choice = { type: 'builtin_function', function: { name: '$web_search' } };
+                                delete retryBodyObj.thinking;
+                                retryBodyObj.max_tokens = 256;
+                                retryBodyObj.temperature = 1;
+                                const retryResp = await fetchWithRetry(url, {
+                                    method: 'POST',
+                                    headers: init.headers,
+                                    body: JSON.stringify(retryBodyObj),
+                                });
+                                const retryData = await retryResp.json();
+                                const retryToolUrls = extractToolUrlsFromResponse(providerType, retryData, false);
+                                if (retryToolUrls.length > 0) {
+                                    // Merge retry tool URLs into the main set
+                                    for (const u of retryToolUrls) {
+                                        if (!toolUrls.includes(u)) toolUrls.push(u);
+                                    }
+                                }
+                            } catch (_) { /* non-fatal retry */ }
+                        }
 
                         // Downgrade hasRealWebSearch if tool silently failed or returned no URLs
                         if (hasRealWebSearch && (toolError || toolUrls.length === 0)) {

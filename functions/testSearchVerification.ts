@@ -150,6 +150,28 @@ function urlInList(url, list) {
     return items.some(item => item.replace(/\/+$/, '').toLowerCase() === normalized);
 }
 
+function isSafeHttpUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    let parsed;
+    try { parsed = new URL(urlStr); } catch (_) { return false; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname.endsWith('.local')) return false;
+    if (hostname === '[::1]' || hostname === '::1') return false;
+    const ipv6Bare = hostname.replace(/^\[|\]$/g, '');
+    if (/^f[cd]/i.test(ipv6Bare) || /^fe[89ab]/i.test(ipv6Bare)) return false;
+    const ipMatch = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipMatch) {
+        const [, a, b] = ipMatch.map(Number);
+        if (a === 127 || a === 10 || a === 0) return false;
+        if (a === 172 && b >= 16 && b <= 31) return false;
+        if (a === 192 && b === 168) return false;
+        if (a === 169 && b === 254) return false;
+    }
+    return true;
+}
+
 // ── Test Runner ──
 
 function assert(condition, testName) {
@@ -223,6 +245,23 @@ function runTests() {
     const noToolUrlsData = { choices: [{ message: { content: 'Some analysis without URLs' }, finish_reason: 'stop' }] };
     const noToolUrls = extractToolUrlsFromResponse('openai', noToolUrlsData, false);
     results.push(assert(noToolUrls.length === 0, 'Silent failure: no tool URLs returns empty array'));
+
+    // Test 13: SSRF safety — isSafeHttpUrl rejects private networks
+    results.push(assert(!isSafeHttpUrl('http://localhost/test'), 'SSRF: rejects localhost'));
+    results.push(assert(!isSafeHttpUrl('http://127.0.0.1/test'), 'SSRF: rejects 127.0.0.1'));
+    results.push(assert(!isSafeHttpUrl('http://10.0.0.1/test'), 'SSRF: rejects 10.x'));
+    results.push(assert(!isSafeHttpUrl('http://192.168.1.1/test'), 'SSRF: rejects 192.168.x'));
+    results.push(assert(!isSafeHttpUrl('http://172.16.0.1/test'), 'SSRF: rejects 172.16.x'));
+    results.push(assert(!isSafeHttpUrl('http://169.254.1.1/test'), 'SSRF: rejects 169.254.x'));
+    results.push(assert(!isSafeHttpUrl('http://[::1]/test'), 'SSRF: rejects IPv6 loopback'));
+    results.push(assert(!isSafeHttpUrl('ftp://example.com/file'), 'SSRF: rejects ftp'));
+    results.push(assert(!isSafeHttpUrl('http://user:pass@example.com'), 'SSRF: rejects credentials'));
+    results.push(assert(isSafeHttpUrl('https://www.legislation.gov.uk/test'), 'SSRF: allows legitimate URL'));
+
+    // Test 14: Text content URLs are NOT extracted as tool URLs
+    const textOnlyData = { choices: [{ message: { content: 'Found at https://example.com/law123 and https://example.com/law456', tool_calls: [] }, finish_reason: 'stop' }] };
+    const textOnlyUrls = extractToolUrlsFromResponse('openai', textOnlyData, false);
+    results.push(assert(textOnlyUrls.length === 0, 'Provenance: URLs in text content are not extracted as tool URLs'));
 
     return results;
 }
