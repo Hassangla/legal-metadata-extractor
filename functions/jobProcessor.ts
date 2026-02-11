@@ -1261,9 +1261,8 @@ Deno.serve(async (req) => {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data || {};
                         const rawEconomy = (input.Economy || '').toLowerCase().trim();
-                        const aliasFallbackEnabled = (Deno.env.get('ENABLE_ECONOMY_ALIAS_FALLBACK') || '').toLowerCase() === 'true';
                         const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
-                        const economyCode = economyMap[rawEconomy] || (aliasFallbackEnabled ? (economyMap[resolvedEconomy] || '') : '');
+                        const economyCode = economyMap[rawEconomy] || economyMap[resolvedEconomy] || '';
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
