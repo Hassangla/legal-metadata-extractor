@@ -51,6 +51,44 @@ function isWebSearchChoiceCompatible(providerType, webSearchChoice, modelId) {
     }
 }
 
+function normalizeWebSearchChoice(providerType, webSearchChoice, modelId) {
+    const requested = webSearchChoice || 'none';
+    if (requested === 'none') return 'none';
+    if (isWebSearchChoiceCompatible(providerType, requested, modelId)) return requested;
+
+    // Compatibility fallback for legacy jobs/connections that stored older option names.
+    switch (providerType) {
+        case 'openai':
+            return isOpenAIWebSearchModel(modelId) ? 'web_search_preview' : 'none';
+        case 'anthropic':
+            return 'web_search';
+        case 'google':
+            return 'google_search';
+        case 'perplexity':
+            return 'builtin';
+        case 'openai_compatible': {
+            const id = (modelId || '').toLowerCase();
+            const isKimi = id.includes('kimi') || id.includes('moonshot');
+            return isKimi ? 'kimi_web_search' : 'none';
+        }
+        default:
+            return 'none';
+    }
+}
+
+function detectProviderTypeFromUrl(baseUrl) {
+    const url = (baseUrl || '').toLowerCase().replace(/\/+$/, '');
+    if (url.includes('anthropic.com')) return 'anthropic';
+    if (url.includes('openai.azure.com')) return 'azure_openai';
+    if (url.includes('api.groq.com') || url.includes('groq.com')) return 'groq';
+    if (url.includes('together.xyz') || url.includes('together.ai')) return 'together';
+    if (url.includes('mistral.ai')) return 'mistral';
+    if (url.includes('perplexity.ai')) return 'perplexity';
+    if (url.includes('generativelanguage.googleapis.com')) return 'google';
+    if (url.includes('api.openai.com')) return 'openai';
+    return 'openai_compatible';
+}
+
 function isLikelyVagueLegalBasis(text) {
     const v = String(text || '').trim().toLowerCase();
     if (!v) return true;
@@ -431,9 +469,39 @@ function extractJSON(content) {
 
 // ── TOOL URL EXTRACTION (provenance proof from provider response) ──
 
+function extractUrlsFromText(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    const matches = raw.match(/https?:\/\/[^\s)\]}>"'`]+/gi) || [];
+    return matches
+        .map((u) => u.replace(/[.,;:!?]+$/g, ''))
+        .filter((u) => u.startsWith('http'));
+}
+
+function collectUrlsDeep(value, out) {
+    if (!value) return;
+    if (typeof value === 'string') {
+        for (const u of extractUrlsFromText(value)) out.push(u);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const v of value) collectUrlsDeep(v, out);
+        return;
+    }
+    if (typeof value === 'object') {
+        for (const [k, v] of Object.entries(value)) {
+            const key = k.toLowerCase();
+            if ((key === 'url' || key === 'uri' || key === 'href' || key === 'link') && typeof v === 'string') {
+                out.push(v);
+                continue;
+            }
+            collectUrlsDeep(v, out);
+        }
+    }
+}
+
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     const urls = [];
-    // OpenAI Responses API: annotations on output_text parts
+    // OpenAI Responses API: annotations on output_text parts + web_search_call payloads
     if (isResponsesApi) {
         if (Array.isArray(data?.output)) {
             for (const item of data.output) {
@@ -449,11 +517,12 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                         }
                     }
                 }
-                if (Array.isArray(item?.search_results)) {
-                    for (const r of item.search_results) { if (r?.url) urls.push(r.url); }
+                if (item.type === 'web_search_call') {
+                    collectUrlsDeep(item, urls);
                 }
             }
         }
+        collectUrlsDeep(data?.citations, urls);
         return [...new Set(urls)];
     }
     // Anthropic: web_search_tool_result blocks
@@ -490,18 +559,6 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
         }
     }
-    if (Array.isArray(msg?.citations)) {
-        for (const c of msg.citations) {
-            if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
-            if (c?.url && typeof c.url === 'string') urls.push(c.url);
-        }
-    }
-    if (Array.isArray(data?.choices?.[0]?.citations)) {
-        for (const c of data.choices[0].citations) {
-            if (typeof c === 'string' && c.startsWith('http')) urls.push(c);
-            if (c?.url && typeof c.url === 'string') urls.push(c.url);
-        }
-    }
     if (msg && Array.isArray(msg.content)) {
         for (const part of msg.content) {
             if (part.annotations && Array.isArray(part.annotations)) {
@@ -511,6 +568,17 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             }
         }
     }
+
+    // Kimi / OpenAI-compatible: capture URLs from tool call arguments and assistant text
+    if (Array.isArray(msg?.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+            collectUrlsDeep(tc.function?.arguments, urls);
+        }
+    }
+    if (typeof msg?.content === 'string') {
+        for (const u of extractUrlsFromText(msg.content)) urls.push(u);
+    }
+
     // Some OpenAI/compatible responses include top-level citations
     if (Array.isArray(data?.citations)) {
         for (const c of data.citations) {
@@ -521,29 +589,28 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     return [...new Set(urls)];
 }
 
+function responseHasSearchSignal(providerType, data, isResponsesApi) {
+    if (!data || typeof data !== 'object') return false;
 
-function extractHttpUrlsFromText(text) {
-    const t = String(text || '');
-    if (!t) return [];
-    const matches = t.match(/https?:\/\/[^\s)\]>"']+/g) || [];
-    return [...new Set(matches.map(u => u.trim().replace(/[.,;:!?]+$/, '')))].filter(Boolean);
-}
+    if (isResponsesApi) {
+        return Array.isArray(data.output) && data.output.some((item) => item?.type === 'web_search_call');
+    }
 
-function hasToolCallEvidence(providerType, data) {
-    if (!data) return false;
     if (providerType === 'anthropic') {
-        return (data.content || []).some(b => b?.type === 'web_search_tool_result');
+        return Array.isArray(data.content) && data.content.some((b) => b?.type === 'web_search_tool_result');
     }
+
     if (providerType === 'google') {
-        return !!(data?.candidates?.[0]?.groundingMetadata?.groundingChunks?.length);
+        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        return Array.isArray(chunks) && chunks.length > 0;
     }
+
     if (providerType === 'perplexity') {
-        return Array.isArray(data?.citations) && data.citations.length > 0;
+        return Array.isArray(data.citations) && data.citations.length > 0;
     }
-    const msg = data?.choices?.[0]?.message || {};
-    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return true;
-    if (typeof msg.content === 'string' && msg.content.includes('<|tool_calls_section_begin|>')) return true;
-    return false;
+
+    const toolCalls = data?.choices?.[0]?.message?.tool_calls;
+    return Array.isArray(toolCalls) && toolCalls.length > 0;
 }
 
 function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
@@ -1013,18 +1080,21 @@ Deno.serve(async (req) => {
 
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 const conn = connections[0];
-                
-                if (conn?.provider_type === 'openrouter') {
+
+                const resolvedProviderType = conn?.provider_type || detectProviderTypeFromUrl(conn?.base_url);
+                if (resolvedProviderType === 'openrouter') {
                     return Response.json({ error: 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.' }, { status: 400 });
                 }
                 
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 const model = models[0];
+                const requestedWebSearch = web_search_choice || 'none';
+                const normalizedWebSearch = normalizeWebSearchChoice(resolvedProviderType, requestedWebSearch, model_id);
 
                 const job = await base44.entities.Job.create({
                     connection_id,
                     model_id,
-                    web_search_choice: web_search_choice || 'none',
+                    web_search_choice: normalizedWebSearch,
                     spec_version_id: latestVersion.id,
                     status: 'queued',
                     input_file_url,
@@ -1034,7 +1104,7 @@ Deno.serve(async (req) => {
                     progress_json: { current_batch: 0, last_row_index: 0 },
                     connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
-                    provider_type: conn?.provider_type || 'openai_compatible',
+                    provider_type: resolvedProviderType || 'openai_compatible',
                     task_name: task_name || '',
                     total_input_tokens: 0,
                     total_output_tokens: 0,
@@ -1077,7 +1147,7 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
-                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
+                const providerType = conn.provider_type || detectProviderTypeFromUrl(conn.base_url) || job.provider_type || 'openai_compatible';
                 
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
@@ -1167,13 +1237,13 @@ Deno.serve(async (req) => {
                         const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none'
                             ? job.web_search_choice
                             : 'none';
-                        const searchChoiceCompatible = isWebSearchChoiceCompatible(
+                        const effectiveWebSearch = normalizeWebSearchChoice(
                             providerType,
                             requestedWebSearch,
                             job.model_id,
                         );
-                        const hasRealWebSearch = requestedWebSearch !== 'none' && searchChoiceCompatible;
-                        const effectiveWebSearch = hasRealWebSearch ? requestedWebSearch : 'none';
+                        const searchChoiceCompatible = effectiveWebSearch !== 'none';
+                        const hasRealWebSearch = effectiveWebSearch !== 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
                         // If web search is unavailable, we enforce blank fields server-side after the LLM call.
@@ -1312,6 +1382,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
+                        let kimiObservedToolUrls = [];
+                        let kimiObservedToolCalls = false;
+
                         if (isKimiSearch) {
                           try {
                             const bodyObj = JSON.parse(init.body);
@@ -1342,6 +1415,17 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 const textToolCalls = parseKimiToolCallsFromText(textContent);
                                 const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
                                 const hasToolCalls = toolCalls.length > 0;
+                                if (hasToolCalls) kimiObservedToolCalls = true;
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
 
                                 // If we have tool calls (regardless of finish_reason), echo them
                                 if (hasToolCalls && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop')) {
@@ -1449,18 +1533,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
-                        const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
-                        const searchWasRequested = requestedWebSearch !== 'none';
-                        const toolCallEvidence = hasToolCallEvidence(providerType, data);
-                        let searchActuallyWorked = hasRealWebSearch;
-
-                        // Kimi sometimes returns searched URLs only in assistant text even when tool calls occurred.
-                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search' && toolUrls.length === 0 && toolCallEvidence) {
-                            const textUrls = extractHttpUrlsFromText(content);
-                            for (const u of textUrls) {
+                        if (isKimiSearch && kimiObservedToolUrls.length > 0) {
+                            for (const u of kimiObservedToolUrls) {
                                 if (!toolUrls.includes(u)) toolUrls.push(u);
                             }
                         }
+                        const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
+                        const searchWasRequested = requestedWebSearch !== 'none';
+                        const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
+                        const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
+                        let searchActuallyWorked = hasRealWebSearch;
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
                         // do one retry with an explicit instruction to call $web_search ──
@@ -1494,8 +1576,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade search availability if tool silently failed or returned no URLs
-                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
+                        // Downgrade search availability if tool silently failed or returned no URLs.
+                        // Kimi can execute $web_search without exposing URL citations in every response,
+                        // so treat observed server-side tool calls as valid search execution.
+                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal))) {
                             searchActuallyWorked = false;
                         }
 
@@ -1618,7 +1702,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             searchChoiceCompatible,
                             providerType,
                             modelId: job.model_id,
-                            toolCallEvidence,
                         });
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
