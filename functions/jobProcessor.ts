@@ -1052,18 +1052,21 @@ Deno.serve(async (req) => {
 
                 const connections = await base44.entities.APIConnection.filter({ id: connection_id });
                 const conn = connections[0];
-                
-                if (conn?.provider_type === 'openrouter') {
+
+                const resolvedProviderType = conn?.provider_type || detectProviderTypeFromUrl(conn?.base_url);
+                if (resolvedProviderType === 'openrouter') {
                     return Response.json({ error: 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.' }, { status: 400 });
                 }
                 
                 const models = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
                 const model = models[0];
+                const requestedWebSearch = web_search_choice || 'none';
+                const normalizedWebSearch = normalizeWebSearchChoice(resolvedProviderType, requestedWebSearch, model_id);
 
                 const job = await base44.entities.Job.create({
                     connection_id,
                     model_id,
-                    web_search_choice: web_search_choice || 'none',
+                    web_search_choice: normalizedWebSearch,
                     spec_version_id: latestVersion.id,
                     status: 'queued',
                     input_file_url,
@@ -1073,7 +1076,7 @@ Deno.serve(async (req) => {
                     progress_json: { current_batch: 0, last_row_index: 0 },
                     connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
-                    provider_type: conn?.provider_type || 'openai_compatible',
+                    provider_type: resolvedProviderType || 'openai_compatible',
                     task_name: task_name || '',
                     total_input_tokens: 0,
                     total_output_tokens: 0,
