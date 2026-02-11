@@ -24,22 +24,24 @@ export default function Dashboard() {
     }, []);
 
     const loadData = async () => {
+        // Load spec and jobs independently so one failure doesn't block the other
         try {
-            // Check spec
             const specResponse = await base44.functions.invoke('specManager', { action: 'getActive' });
             setHasSpec(!!specResponse.data.spec);
+        } catch (error) {
+            console.error('Failed to load spec:', error);
+        }
 
-            // Get jobs
+        try {
             const jobsResponse = await base44.functions.invoke('jobProcessor', { action: 'list' });
             const jobs = jobsResponse.data.jobs || [];
-            
             setStats({
                 totalJobs: jobs.length,
                 completedJobs: jobs.filter(j => j.status === 'done').length,
                 recentJobs: jobs.slice(0, 5)
             });
         } catch (error) {
-            console.error('Failed to load dashboard data:', error);
+            console.error('Failed to load jobs:', error);
         }
     };
 
