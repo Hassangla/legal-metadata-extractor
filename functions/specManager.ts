@@ -78,8 +78,12 @@ Examples:
 7. Capitalization: normalize consistently (avoid ALL CAPS).
 8. Record all changes in Normalization_Notes.
 
-## SECTION: Evidence-to-Output Synchronization
-Every populated Final_* value must be supported by evidence. If any Final_* field is blank but evidence contains a usable candidate, you must populate it or explain why in Missing_Conflict_Reason.
+## SECTION: Evidence-to-Output Synchronization (NO-ORPHAN Rule)
+Every populated Final_* value must be supported by evidence. If any Final_* field is blank but evidence contains a usable candidate, you MUST populate it (promote from evidence) or explain why not in Missing_Conflict_Reason. Specifically:
+- If Final_Instrument_Full_Name_Original_Language is blank but Normalized_Title_Used or Raw_Official_Title_As_Source has content → promote it.
+- If Final_Instrument_Published_Name is blank but a normalized title exists → promote it (keep as-is for French/Spanish per Final_Language_Doc; otherwise use English name).
+- If Final_Language_Doc is blank but Language_Justification clearly identifies a language → promote it.
+Leaving a Final_* blank when evidence exists WITHOUT an explanation in Missing_Conflict_Reason is a spec violation.
 Tier 5 findings: may only populate Final_Language_Doc, names, Final_Instrument_URL. Not dates/status/repeal unless source text explicitly states them.`;
 
 Deno.serve(async (req) => {
