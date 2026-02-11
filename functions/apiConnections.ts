@@ -522,17 +522,21 @@ Deno.serve(async (req) => {
 
             case 'list': {
                 const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
-                const enriched = [];
-                for (const c of connections) {
-                    const models = await base44.entities.ModelCatalog.filter({ connection_id: c.id });
-                    enriched.push({
-                        ...c,
-                        api_key_encrypted: undefined,
-                        has_key: !!c.api_key_encrypted,
-                        model_count: models.length,
-                        web_search_model_count: models.filter(m => m.supports_web_search === true).length,
-                    });
+                // Fetch all models once instead of per-connection to avoid N+1 queries
+                const allModels = await base44.entities.ModelCatalog.list();
+                const modelsByConn = {};
+                for (const m of allModels) {
+                    if (!modelsByConn[m.connection_id]) modelsByConn[m.connection_id] = { total: 0, webSearch: 0 };
+                    modelsByConn[m.connection_id].total++;
+                    if (m.supports_web_search === true) modelsByConn[m.connection_id].webSearch++;
                 }
+                const enriched = connections.map(c => ({
+                    ...c,
+                    api_key_encrypted: undefined,
+                    has_key: !!c.api_key_encrypted,
+                    model_count: modelsByConn[c.id]?.total || 0,
+                    web_search_model_count: modelsByConn[c.id]?.webSearch || 0,
+                }));
                 return Response.json({ connections: enriched });
             }
 
@@ -657,32 +661,35 @@ Deno.serve(async (req) => {
                         const apiKey = await decryptAndMigrate(conn, base44);
                         const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
                         models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
-                    } catch (_) {
-                        // Live fetch failed — return empty, user can manually refresh
-                    }
+                    } catch (_) {}
                 }
 
-                // Re-apply web search detection on ALL cached models.
-                // This patches models cached before detectWebSearch was expanded,
-                // including ones previously marked false that may now be detected as true.
+                // Re-apply web search detection in-memory only; batch DB updates
+                // for models that actually changed to avoid excessive API calls.
                 if (conn && models.length > 0) {
                     const pk = conn.provider_type || 'openai_compatible';
+                    const toUpdate = [];
                     for (const m of models) {
                         const ws = detectWebSearch(pk, m.model_id, conn.base_url);
                         if (ws.supports !== null && (
                             m.supports_web_search !== ws.supports ||
                             JSON.stringify(m.web_search_options || []) !== JSON.stringify(ws.options)
                         )) {
-                            try {
-                                await base44.entities.ModelCatalog.update(m.id, {
-                                    supports_web_search: ws.supports,
-                                    web_search_options: ws.options,
-                                    last_checked_at: new Date().toISOString(),
-                                });
-                                m.supports_web_search = ws.supports;
-                                m.web_search_options = ws.options;
-                            } catch (_) {}
+                            m.supports_web_search = ws.supports;
+                            m.web_search_options = ws.options;
+                            toUpdate.push(m);
                         }
+                    }
+                    // Only update first 10 changed models to stay within CPU limits
+                    const now = new Date().toISOString();
+                    for (const m of toUpdate.slice(0, 10)) {
+                        try {
+                            await base44.entities.ModelCatalog.update(m.id, {
+                                supports_web_search: m.supports_web_search,
+                                web_search_options: m.web_search_options,
+                                last_checked_at: now,
+                            });
+                        } catch (_) {}
                     }
                 }
 
