@@ -1897,6 +1897,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             status: 'done',
                             output_json: outputJson,
                             evidence_json: ev,
+                            raw_llm_output: (content || '').slice(0, 50000),
                             input_tokens: inputTokens,
                             output_tokens: outputTokens,
                         });
