@@ -9,7 +9,7 @@ import {
     FileText, PlayCircle, Settings, History, ArrowRight, 
     CheckCircle, Clock, AlertCircle, TrendingUp
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { formatDCTime } from '@/components/utils/formatDCTime';
 
 export default function Dashboard() {
     const [stats, setStats] = useState({

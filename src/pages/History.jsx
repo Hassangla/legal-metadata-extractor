@@ -16,7 +16,7 @@ import {
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { format } from 'date-fns';
+import { formatDCTime } from '@/components/utils/formatDCTime';
 import { toast } from 'sonner';
 
 import JobProgress from '@/components/jobs/JobProgress';
