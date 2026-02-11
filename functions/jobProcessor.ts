@@ -783,15 +783,19 @@ async function finalizeAndVerify(ev, ctx) {
     // ── (A0) TOOL URL PROVENANCE enforcement ──
     // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls)
     // to prove it came from real search results, not model hallucination.
-    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL && ctx.toolUrls && ctx.toolUrls.length > 0) {
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const normalizedFinal = ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase();
-        const inToolUrls = ctx.toolUrls.some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
-        if (!inToolUrls) {
+        const inToolUrls = (ctx.toolUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
+        const inEvidenceDerived = (ctx.evidenceDerivedVerifiedUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
+        if (!inToolUrls && !inEvidenceDerived) {
             addReason(
-                `URL not found in tool-returned URL set; blanked server-side. ` +
-                `Final_Instrument_URL "${ev.Final_Instrument_URL}" was not in the ${ctx.toolUrls.length} URLs returned by the search tool.`
+                `URL not found in server-observed URL sets; blanked server-side. ` +
+                `Final_Instrument_URL "${ev.Final_Instrument_URL}" was not in tool-derived URLs (${(ctx.toolUrls || []).length}) ` +
+                `or verified evidence-derived URLs (${(ctx.evidenceDerivedVerifiedUrls || []).length}).`
             );
             ev.Final_Instrument_URL = '';
+        } else if (inEvidenceDerived && !inToolUrls) {
+            addReason('Using evidence-derived verified URL (no structured tool URL captured for this row).');
         }
     }
 
@@ -1689,11 +1693,24 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             };
                         }
 
+
+                        // If structured tool URL extraction found none, try evidence-derived URLs.
+                        // These are lower confidence than tool-derived URLs and are marked separately.
+                        let evidenceDerivedVerifiedUrls = [];
+                        if (searchWasRequested && toolUrls.length === 0 && parsed?.evidence) {
+                            const evidenceDerivedCandidates = extractEvidenceDerivedUrls(parsed.evidence);
+                            evidenceDerivedVerifiedUrls = await verifyCandidateUrls(evidenceDerivedCandidates, 8);
+                            if (evidenceDerivedVerifiedUrls.length > 0) {
+                                searchActuallyWorked = true;
+                            }
+                        }
+
                         // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
                         const ev = await finalizeAndVerify(parsed.evidence, {
                             hasRealWebSearch: searchActuallyWorked,
                             searchWasRequested,
                             toolUrls,
+                            evidenceDerivedVerifiedUrls,
                             row_index: row.row_index,
                             economy: input.Economy,
                             economyCode,
