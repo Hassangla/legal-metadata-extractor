@@ -1437,9 +1437,35 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
                                 }
 
-                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
-                                for (const u of loopUrls) {
-                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                // Also extract URLs from tool call arguments (Kimi search results)
+                                const choice0 = data.choices?.[0]?.message;
+                                if (choice0) {
+                                    const allToolCalls = Array.isArray(choice0.tool_calls) ? choice0.tool_calls : toolCalls;
+                                    for (const tc of allToolCalls) {
+                                        const args = tc.function?.arguments || '';
+                                        if (typeof args === 'string') {
+                                            const argUrls = extractUrlsFromText(args);
+                                            for (const u of argUrls) {
+                                                if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                            }
+                                        }
+                                        // Also try parsing arguments as JSON and collecting urls
+                                        try {
+                                            const parsed = typeof args === 'string' ? JSON.parse(args) : args;
+                                            const deepUrls = [];
+                                            collectUrlsDeep(parsed, deepUrls);
+                                            for (const u of deepUrls) {
+                                                if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                            }
+                                        } catch (_) {}
+                                    }
+                                    // Capture URLs from assistant content text as well (Kimi often embeds URLs in content)
+                                    if (typeof choice0.content === 'string' && choice0.content.length > 0) {
+                                        const contentUrls = extractUrlsFromText(choice0.content);
+                                        for (const u of contentUrls) {
+                                            if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                        }
+                                    }
                                 }
 
                                 // If we have tool calls (regardless of finish_reason), echo them
