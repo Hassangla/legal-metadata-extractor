@@ -17,7 +17,6 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { format } from 'date-fns';
-import { toZonedTime } from 'date-fns-tz';
 import { toast } from 'sonner';
 
 import JobProgress from '@/components/jobs/JobProgress';
