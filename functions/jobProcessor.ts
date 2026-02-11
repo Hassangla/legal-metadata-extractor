@@ -1668,7 +1668,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // Downgrade search availability if tool silently failed or returned no URLs.
                         // Kimi can execute $web_search without exposing URL citations in every response,
                         // so treat observed server-side tool calls as valid search execution.
-                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal))) {
+                        // For Kimi: if we observed tool calls during the echo loop, trust that search worked
+                        // even if the final response doesn't have tool_calls in it.
+                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal && !sawServerToolCall))) {
                             searchActuallyWorked = false;
                         }
 
