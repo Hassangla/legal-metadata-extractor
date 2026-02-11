@@ -1404,6 +1404,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                           try {
                             const bodyObj = JSON.parse(init.body);
                             const MAX_TOOL_LOOPS = 10;
+                            // Track all tool role message contents for URL extraction
+                            const kimiToolResultContents = [];
 
                             for (let loop = 0; loop <= MAX_TOOL_LOOPS; loop++) {
                                 const loopResp = await fetchWithRetry(url, {
