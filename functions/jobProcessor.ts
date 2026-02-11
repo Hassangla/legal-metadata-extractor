@@ -1948,6 +1948,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             await base44.entities.JobRow.update(row.id, {
                                 status: 'error',
                                 error_message: diagMsg.slice(0, 500),
+                                raw_llm_output: (content || '').slice(0, 50000),
                             });
                         } catch (_) {}
                     }
