@@ -40,23 +40,21 @@ Deno.serve(async (req) => {
         const outputAoa = [OUTPUT_HEADERS];
         for (const row of rows) {
             const e = row.evidence_json || {};
-            const o = row.output_json || {};
             const input = row.input_data || {};
-            const hasFinals = e.Final_Flag !== undefined;
             outputAoa.push([
                 '',  // ID — blank, do not edit
-                e.Economy_Code || o.Economy_Code || '',
-                e.Economy || o.Economy || input.Economy || '',
-                hasFinals ? (e.Final_Language_Doc || '') : (o.Language_Doc || ''),
-                hasFinals ? (e.Final_Instrument_Full_Name_Original_Language || '') : (o.Instrument_Full_Name_Original_Language || ''),
-                hasFinals ? (e.Final_Instrument_Published_Name || '') : (o.Instrument_Published_Name || ''),
-                hasFinals ? (e.Final_Instrument_URL || '') : (o.Instrument_URL || ''),
-                hasFinals ? (e.Final_Enactment_Date || '') : (o.Enactment_Date || ''),
-                hasFinals ? (e.Final_Date_of_Entry_in_Force || '') : (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
-                hasFinals ? (e.Final_Repeal_Year || '') : (o.Repeal_Year || ''),
-                hasFinals ? (e.Final_Current_Status || '') : (o.Current_Status || o['Current Status'] || ''),
-                hasFinals ? (e.Final_Public || '') : (o.Public || ''),
-                hasFinals ? (e.Final_Flag || '') : (o.Flag || ''),
+                e.Economy_Code || '',
+                e.Economy || input.Economy || '',
+                e.Final_Language_Doc || '',
+                e.Final_Instrument_Full_Name_Original_Language || '',
+                e.Final_Instrument_Published_Name || '',
+                e.Final_Instrument_URL || '',
+                e.Final_Enactment_Date || '',
+                e.Final_Date_of_Entry_in_Force || '',
+                e.Final_Repeal_Year || '',
+                e.Final_Current_Status || '',
+                e.Final_Public || '',
+                e.Final_Flag || '',
             ]);
         }
 
@@ -78,12 +76,11 @@ Deno.serve(async (req) => {
         const evidenceAoa = [EVIDENCE_HEADERS];
         for (const row of rows) {
             const e = row.evidence_json || {};
-            const o = row.output_json || {};
             const input = row.input_data || {};
             evidenceAoa.push([
                 e.Row_Index || row.row_index,
-                e.Economy || o.Economy || input.Economy || '',
-                e.Economy_Code || o.Economy_Code || '',
+                e.Economy || input.Economy || '',
+                e.Economy_Code || '',
                 e.Legal_basis_verbatim || input.Legal_basis || input['Legal basis'] || '',
                 e.Query_1 || '',
                 e.Query_2 || '',
@@ -101,16 +98,16 @@ Deno.serve(async (req) => {
                 e.Status_Support || '',
                 e.Missing_Conflict_Reason || e['Missing/Conflict_Reason'] || '',
                 e.Normalization_Notes || '',
-                e.Final_Language_Doc ?? o.Language_Doc ?? '',
-                e.Final_Instrument_Full_Name_Original_Language ?? o.Instrument_Full_Name_Original_Language ?? '',
-                e.Final_Instrument_Published_Name ?? o.Instrument_Published_Name ?? '',
-                e.Final_Instrument_URL ?? o.Instrument_URL ?? '',
-                e.Final_Enactment_Date ?? o.Enactment_Date ?? '',
-                e.Final_Date_of_Entry_in_Force ?? (o.Date_of_Entry_in_Force || o['Date of Entry in Force'] || ''),
-                e.Final_Repeal_Year ?? o.Repeal_Year ?? '',
-                e.Final_Current_Status ?? (o.Current_Status || o['Current Status'] || ''),
-                e.Final_Public ?? o.Public ?? '',
-                e.Final_Flag ?? o.Flag ?? '',
+                e.Final_Language_Doc || '',
+                e.Final_Instrument_Full_Name_Original_Language || '',
+                e.Final_Instrument_Published_Name || '',
+                e.Final_Instrument_URL || '',
+                e.Final_Enactment_Date || '',
+                e.Final_Date_of_Entry_in_Force || '',
+                e.Final_Repeal_Year || '',
+                e.Final_Current_Status || '',
+                e.Final_Public || '',
+                e.Final_Flag || '',
             ]);
         }
 
