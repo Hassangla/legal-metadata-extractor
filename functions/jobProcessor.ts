@@ -512,6 +512,9 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                                 if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
                             }
                         }
+                        if (Array.isArray(part?.citations)) {
+                            for (const c of part.citations) { if (c?.url) urls.push(c.url); }
+                        }
                     }
                 }
                 if (item.type === 'web_search_call') {
@@ -850,7 +853,7 @@ async function finalizeAndVerify(ev, ctx) {
     // If the provider was supposed to search but returned zero tool URLs,
     // the model may have fabricated URLs in text. Blank Evidence URL fields
     // to prevent misleading spreadsheet output.
-    if (ctx.searchWasRequested && !ctx.hasRealWebSearch && ctx.toolUrls && ctx.toolUrls.length === 0) {
+    if (ctx.searchWasRequested && ctx.searchChoiceCompatible !== false && ctx.toolCallEvidence && !ctx.hasRealWebSearch && ctx.toolUrls && ctx.toolUrls.length === 0) {
         ev.URLs_Considered = '';
         ev.Selected_Source_URLs = '';
         addReason('Web search enabled, but no tool-returned URLs were observed server-side; ignoring model-typed URLs. Treating as No sources per spec.');
@@ -917,7 +920,8 @@ async function finalizeAndVerify(ev, ctx) {
     // ── (E) Normalize Missing/Conflict_Reason field naming ──
     // Merge any pre-existing reason with new notes
     const prevReason = ev.Missing_Conflict_Reason || ev['Missing/Conflict_Reason'] || '';
-    const allReasons = [prevReason, ...notes].filter(Boolean).join('; ');
+    const uniqReasons = [...new Set([prevReason, ...notes].filter(Boolean))];
+    const allReasons = uniqReasons.join('; ');
     ev.Missing_Conflict_Reason = allReasons;
     ev['Missing/Conflict_Reason'] = allReasons;
 
