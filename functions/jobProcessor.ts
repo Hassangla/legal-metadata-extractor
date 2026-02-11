@@ -894,7 +894,7 @@ async function finalizeAndVerify(ev, ctx) {
     // If the provider was supposed to search but returned zero tool URLs,
     // the model may have fabricated URLs in text. Blank Evidence URL fields
     // to prevent misleading spreadsheet output.
-    if (ctx.searchWasRequested && ctx.searchChoiceCompatible !== false && ctx.toolCallEvidence && !ctx.hasRealWebSearch && ctx.toolUrls && ctx.toolUrls.length === 0) {
+    if (ctx.searchWasRequested && ctx.searchChoiceCompatible !== false && !ctx.hasRealWebSearch && ctx.toolUrls && ctx.toolUrls.length === 0) {
         ev.URLs_Considered = '';
         ev.Selected_Source_URLs = '';
         addReason('Web search enabled, but no tool-returned URLs were observed server-side; ignoring model-typed URLs. Treating as No sources per spec.');
