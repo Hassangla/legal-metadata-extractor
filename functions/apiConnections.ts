@@ -522,17 +522,11 @@ Deno.serve(async (req) => {
 
             case 'list': {
                 const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
-                const enriched = [];
-                for (const c of connections) {
-                    const models = await base44.entities.ModelCatalog.filter({ connection_id: c.id });
-                    enriched.push({
-                        ...c,
-                        api_key_encrypted: undefined,
-                        has_key: !!c.api_key_encrypted,
-                        model_count: models.length,
-                        web_search_model_count: models.filter(m => m.supports_web_search === true).length,
-                    });
-                }
+                const enriched = connections.map(c => ({
+                    ...c,
+                    api_key_encrypted: undefined,
+                    has_key: !!c.api_key_encrypted,
+                }));
                 return Response.json({ connections: enriched });
             }
 
@@ -657,32 +651,35 @@ Deno.serve(async (req) => {
                         const apiKey = await decryptAndMigrate(conn, base44);
                         const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
                         models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
-                    } catch (_) {
-                        // Live fetch failed — return empty, user can manually refresh
-                    }
+                    } catch (_) {}
                 }
 
-                // Re-apply web search detection on ALL cached models.
-                // This patches models cached before detectWebSearch was expanded,
-                // including ones previously marked false that may now be detected as true.
+                // Re-apply web search detection in-memory only; batch DB updates
+                // for models that actually changed to avoid excessive API calls.
                 if (conn && models.length > 0) {
                     const pk = conn.provider_type || 'openai_compatible';
+                    const toUpdate = [];
                     for (const m of models) {
                         const ws = detectWebSearch(pk, m.model_id, conn.base_url);
                         if (ws.supports !== null && (
                             m.supports_web_search !== ws.supports ||
                             JSON.stringify(m.web_search_options || []) !== JSON.stringify(ws.options)
                         )) {
-                            try {
-                                await base44.entities.ModelCatalog.update(m.id, {
-                                    supports_web_search: ws.supports,
-                                    web_search_options: ws.options,
-                                    last_checked_at: new Date().toISOString(),
-                                });
-                                m.supports_web_search = ws.supports;
-                                m.web_search_options = ws.options;
-                            } catch (_) {}
+                            m.supports_web_search = ws.supports;
+                            m.web_search_options = ws.options;
+                            toUpdate.push(m);
                         }
+                    }
+                    // Only update first 10 changed models to stay within CPU limits
+                    const now = new Date().toISOString();
+                    for (const m of toUpdate.slice(0, 10)) {
+                        try {
+                            await base44.entities.ModelCatalog.update(m.id, {
+                                supports_web_search: m.supports_web_search,
+                                web_search_options: m.web_search_options,
+                                last_checked_at: now,
+                            });
+                        } catch (_) {}
                     }
                 }
 
@@ -807,18 +804,17 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
 
     const now = new Date().toISOString();
 
+    // Fetch all existing models for this connection once (not per-model)
+    const existingModels = await base44.entities.ModelCatalog.filter({ connection_id: connectionId });
+    const existingMap = {};
+    for (const em of existingModels) { existingMap[em.model_id] = em; }
+
     for (const m of models) {
-        // Auto-detect web search support from provider + model name
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
-
-        const existing = await base44.entities.ModelCatalog.filter({
-            connection_id: connectionId,
-            model_id: m.id,
-        });
-
+        const existing = existingMap[m.id];
         const pricing = lookupStaticPricing(m.id);
 
-        if (existing.length === 0) {
+        if (!existing) {
             await base44.entities.ModelCatalog.create({
                 connection_id: connectionId,
                 model_id: m.id,
@@ -831,20 +827,17 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 pricing_source: pricing ? 'static' : '',
             });
         } else {
-            const update = {
-                display_name: m.name,
-                last_checked_at: now,
-            };
+            const update = { display_name: m.name, last_checked_at: now };
             if (ws.supports !== null) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
             }
-            if ((!existing[0].input_price_per_million || existing[0].pricing_source !== 'manual') && pricing) {
+            if ((!existing.input_price_per_million || existing.pricing_source !== 'manual') && pricing) {
                 update.input_price_per_million = pricing.input;
                 update.output_price_per_million = pricing.output;
                 update.pricing_source = 'static';
             }
-            await base44.entities.ModelCatalog.update(existing[0].id, update);
+            await base44.entities.ModelCatalog.update(existing.id, update);
         }
     }
 

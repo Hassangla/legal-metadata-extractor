@@ -586,6 +586,30 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     return [...new Set(urls)];
 }
 
+function responseHasSearchSignal(providerType, data, isResponsesApi) {
+    if (!data || typeof data !== 'object') return false;
+
+    if (isResponsesApi) {
+        return Array.isArray(data.output) && data.output.some((item) => item?.type === 'web_search_call');
+    }
+
+    if (providerType === 'anthropic') {
+        return Array.isArray(data.content) && data.content.some((b) => b?.type === 'web_search_tool_result');
+    }
+
+    if (providerType === 'google') {
+        const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        return Array.isArray(chunks) && chunks.length > 0;
+    }
+
+    if (providerType === 'perplexity') {
+        return Array.isArray(data.citations) && data.citations.length > 0;
+    }
+
+    const toolCalls = data?.choices?.[0]?.message?.tool_calls;
+    return Array.isArray(toolCalls) && toolCalls.length > 0;
+}
+
 function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
     if (!content && !data) return false;
     const text = (content || '').toLowerCase();
@@ -1355,6 +1379,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
                         let kimiObservedToolUrls = [];
+                        let kimiObservedToolCalls = false;
 
                         if (isKimiSearch) {
                           try {
@@ -1386,6 +1411,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 const textToolCalls = parseKimiToolCallsFromText(textContent);
                                 const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
                                 const hasToolCalls = toolCalls.length > 0;
+                                if (hasToolCalls) kimiObservedToolCalls = true;
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
 
                                 const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
                                 for (const u of loopUrls) {
@@ -1505,6 +1536,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
+                        const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
+                        const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
@@ -1539,11 +1572,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade search availability ONLY on explicit tool failure.
-                        // Some providers/models execute server-side web search but do not always emit
-                        // URL citations/tool metadata in every response shape. Missing tool URLs alone
-                        // must not force "No sources" when web search is compatible and no tool error occurred.
-                        if (searchActuallyWorked && toolError) {
+                        // Downgrade search availability if tool silently failed or returned no URLs.
+                        // Kimi can execute $web_search without exposing URL citations in every response,
+                        // so treat observed server-side tool calls as valid search execution.
+                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal))) {
                             searchActuallyWorked = false;
                         }
 
