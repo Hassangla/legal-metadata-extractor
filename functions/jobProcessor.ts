@@ -1923,11 +1923,20 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             Flag: ev.Final_Flag || '',
                         };
 
+                        // Build raw output: include both parsed content and raw API response structure
+                        let rawOutput = '=== EXTRACTED CONTENT ===\n' + (content || '') + '\n\n';
+                        if (isResponsesApi && Array.isArray(data?.output)) {
+                            rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
+                        } else if (data?.choices) {
+                            rawOutput += '=== RAW CHOICES ===\n' + JSON.stringify(data.choices, null, 2).slice(0, 30000);
+                        }
+                        rawOutput += '\n\n=== TOOL URLS EXTRACTED ===\n' + (toolUrls.length ? toolUrls.join('\n') : '(none)');
+
                         await base44.entities.JobRow.update(row.id, {
                             status: 'done',
                             output_json: outputJson,
                             evidence_json: ev,
-                            raw_llm_output: (content || '').slice(0, 50000),
+                            raw_llm_output: rawOutput.slice(0, 50000),
                             input_tokens: inputTokens,
                             output_tokens: outputTokens,
                         });
