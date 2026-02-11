@@ -51,6 +51,44 @@ function isWebSearchChoiceCompatible(providerType, webSearchChoice, modelId) {
     }
 }
 
+function normalizeWebSearchChoice(providerType, webSearchChoice, modelId) {
+    const requested = webSearchChoice || 'none';
+    if (requested === 'none') return 'none';
+    if (isWebSearchChoiceCompatible(providerType, requested, modelId)) return requested;
+
+    // Compatibility fallback for legacy jobs/connections that stored older option names.
+    switch (providerType) {
+        case 'openai':
+            return isOpenAIWebSearchModel(modelId) ? 'web_search_preview' : 'none';
+        case 'anthropic':
+            return 'web_search';
+        case 'google':
+            return 'google_search';
+        case 'perplexity':
+            return 'builtin';
+        case 'openai_compatible': {
+            const id = (modelId || '').toLowerCase();
+            const isKimi = id.includes('kimi') || id.includes('moonshot');
+            return isKimi ? 'kimi_web_search' : 'none';
+        }
+        default:
+            return 'none';
+    }
+}
+
+function detectProviderTypeFromUrl(baseUrl) {
+    const url = (baseUrl || '').toLowerCase().replace(/\/+$/, '');
+    if (url.includes('anthropic.com')) return 'anthropic';
+    if (url.includes('openai.azure.com')) return 'azure_openai';
+    if (url.includes('api.groq.com') || url.includes('groq.com')) return 'groq';
+    if (url.includes('together.xyz') || url.includes('together.ai')) return 'together';
+    if (url.includes('mistral.ai')) return 'mistral';
+    if (url.includes('perplexity.ai')) return 'perplexity';
+    if (url.includes('generativelanguage.googleapis.com')) return 'google';
+    if (url.includes('api.openai.com')) return 'openai';
+    return 'openai_compatible';
+}
+
 function isLikelyVagueLegalBasis(text) {
     const v = String(text || '').trim().toLowerCase();
     if (!v) return true;
@@ -431,9 +469,39 @@ function extractJSON(content) {
 
 // ── TOOL URL EXTRACTION (provenance proof from provider response) ──
 
+function extractUrlsFromText(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    const matches = raw.match(/https?:\/\/[^\s)\]}>"'`]+/gi) || [];
+    return matches
+        .map((u) => u.replace(/[.,;:!?]+$/g, ''))
+        .filter((u) => u.startsWith('http'));
+}
+
+function collectUrlsDeep(value, out) {
+    if (!value) return;
+    if (typeof value === 'string') {
+        for (const u of extractUrlsFromText(value)) out.push(u);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const v of value) collectUrlsDeep(v, out);
+        return;
+    }
+    if (typeof value === 'object') {
+        for (const [k, v] of Object.entries(value)) {
+            const key = k.toLowerCase();
+            if ((key === 'url' || key === 'uri' || key === 'href' || key === 'link') && typeof v === 'string') {
+                out.push(v);
+                continue;
+            }
+            collectUrlsDeep(v, out);
+        }
+    }
+}
+
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     const urls = [];
-    // OpenAI Responses API: annotations on output_text parts
+    // OpenAI Responses API: annotations on output_text parts + web_search_call payloads
     if (isResponsesApi) {
         if (Array.isArray(data?.output)) {
             for (const item of data.output) {
@@ -446,8 +514,12 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                         }
                     }
                 }
+                if (item.type === 'web_search_call') {
+                    collectUrlsDeep(item, urls);
+                }
             }
         }
+        collectUrlsDeep(data?.citations, urls);
         return [...new Set(urls)];
     }
     // Anthropic: web_search_tool_result blocks
@@ -493,6 +565,17 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             }
         }
     }
+
+    // Kimi / OpenAI-compatible: capture URLs from tool call arguments and assistant text
+    if (Array.isArray(msg?.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+            collectUrlsDeep(tc.function?.arguments, urls);
+        }
+    }
+    if (typeof msg?.content === 'string') {
+        for (const u of extractUrlsFromText(msg.content)) urls.push(u);
+    }
+
     // Some OpenAI/compatible responses include top-level citations
     if (Array.isArray(data?.citations)) {
         for (const c of data.citations) {
@@ -1033,7 +1116,7 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
-                const providerType = conn.provider_type || job.provider_type || 'openai_compatible';
+                const providerType = conn.provider_type || detectProviderTypeFromUrl(conn.base_url) || job.provider_type || 'openai_compatible';
                 
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
@@ -1123,13 +1206,13 @@ Deno.serve(async (req) => {
                         const requestedWebSearch = job.web_search_choice && job.web_search_choice !== 'none'
                             ? job.web_search_choice
                             : 'none';
-                        const searchChoiceCompatible = isWebSearchChoiceCompatible(
+                        const effectiveWebSearch = normalizeWebSearchChoice(
                             providerType,
                             requestedWebSearch,
                             job.model_id,
                         );
-                        const hasRealWebSearch = requestedWebSearch !== 'none' && searchChoiceCompatible;
-                        const effectiveWebSearch = hasRealWebSearch ? requestedWebSearch : 'none';
+                        const searchChoiceCompatible = effectiveWebSearch !== 'none';
+                        const hasRealWebSearch = effectiveWebSearch !== 'none';
 
                         // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
                         // If web search is unavailable, we enforce blank fields server-side after the LLM call.
@@ -1268,6 +1351,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
+                        let kimiObservedToolUrls = [];
+
                         if (isKimiSearch) {
                           try {
                             const bodyObj = JSON.parse(init.body);
@@ -1298,6 +1383,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 const textToolCalls = parseKimiToolCallsFromText(textContent);
                                 const toolCalls = structuredToolCalls.length ? structuredToolCalls : textToolCalls;
                                 const hasToolCalls = toolCalls.length > 0;
+
+                                const loopUrls = extractToolUrlsFromResponse(providerType, data, false);
+                                for (const u of loopUrls) {
+                                    if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u);
+                                }
 
                                 // If we have tool calls (regardless of finish_reason), echo them
                                 if (hasToolCalls && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop')) {
@@ -1405,6 +1495,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
+                        if (isKimiSearch && kimiObservedToolUrls.length > 0) {
+                            for (const u of kimiObservedToolUrls) {
+                                if (!toolUrls.includes(u)) toolUrls.push(u);
+                            }
+                        }
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
                         let searchActuallyWorked = hasRealWebSearch;
@@ -1441,8 +1536,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade search availability if tool silently failed or returned no URLs
-                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
+                        // Downgrade search availability ONLY on explicit tool failure.
+                        // Some providers/models execute server-side web search but do not always emit
+                        // URL citations/tool metadata in every response shape. Missing tool URLs alone
+                        // must not force "No sources" when web search is compatible and no tool error occurred.
+                        if (searchActuallyWorked && toolError) {
                             searchActuallyWorked = false;
                         }
 
