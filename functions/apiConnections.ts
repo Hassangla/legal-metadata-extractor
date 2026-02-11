@@ -814,18 +814,17 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
 
     const now = new Date().toISOString();
 
+    // Fetch all existing models for this connection once (not per-model)
+    const existingModels = await base44.entities.ModelCatalog.filter({ connection_id: connectionId });
+    const existingMap = {};
+    for (const em of existingModels) { existingMap[em.model_id] = em; }
+
     for (const m of models) {
-        // Auto-detect web search support from provider + model name
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
-
-        const existing = await base44.entities.ModelCatalog.filter({
-            connection_id: connectionId,
-            model_id: m.id,
-        });
-
+        const existing = existingMap[m.id];
         const pricing = lookupStaticPricing(m.id);
 
-        if (existing.length === 0) {
+        if (!existing) {
             await base44.entities.ModelCatalog.create({
                 connection_id: connectionId,
                 model_id: m.id,
@@ -838,20 +837,17 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 pricing_source: pricing ? 'static' : '',
             });
         } else {
-            const update = {
-                display_name: m.name,
-                last_checked_at: now,
-            };
+            const update = { display_name: m.name, last_checked_at: now };
             if (ws.supports !== null) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
             }
-            if ((!existing[0].input_price_per_million || existing[0].pricing_source !== 'manual') && pricing) {
+            if ((!existing.input_price_per_million || existing.pricing_source !== 'manual') && pricing) {
                 update.input_price_per_million = pricing.input;
                 update.output_price_per_million = pricing.output;
                 update.pricing_source = 'static';
             }
-            await base44.entities.ModelCatalog.update(existing[0].id, update);
+            await base44.entities.ModelCatalog.update(existing.id, update);
         }
     }
 
