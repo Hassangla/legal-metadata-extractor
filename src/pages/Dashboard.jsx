@@ -10,6 +10,7 @@ import {
     CheckCircle, Clock, AlertCircle, TrendingUp
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { toZonedTime } from 'date-fns-tz';
 
 export default function Dashboard() {
     const [stats, setStats] = useState({
