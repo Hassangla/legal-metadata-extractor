@@ -515,14 +515,44 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                         if (Array.isArray(part?.citations)) {
                             for (const c of part.citations) { if (c?.url) urls.push(c.url); }
                         }
+                        // Also extract URLs from the text content itself (model may embed URLs)
+                        if (part.text && typeof part.text === 'string') {
+                            for (const u of extractUrlsFromText(part.text)) urls.push(u);
+                        }
                     }
                 }
                 if (item.type === 'web_search_call') {
                     collectUrlsDeep(item, urls);
                 }
+                // Recursively check any nested structure we might have missed
+                if (item.type !== 'message' && item.type !== 'web_search_call') {
+                    collectUrlsDeep(item, urls);
+                }
             }
         }
+        // Also check output_text at top level (sometimes present)
+        if (data?.output_text && typeof data.output_text === 'string') {
+            for (const u of extractUrlsFromText(data.output_text)) urls.push(u);
+        }
         collectUrlsDeep(data?.citations, urls);
+        
+        // Diagnostic: log what we found in the raw response structure
+        if (urls.length === 0 && Array.isArray(data?.output)) {
+            const outputSummary = data.output.map(item => {
+                const summary = { type: item.type, status: item.status };
+                if (item.type === 'message' && Array.isArray(item.content)) {
+                    summary.content_parts = item.content.map(p => ({
+                        type: p.type,
+                        has_annotations: !!(p.annotations && p.annotations.length),
+                        annotation_count: (p.annotations || []).length,
+                        text_len: (p.text || '').length,
+                    }));
+                }
+                return summary;
+            });
+            console.log(`[DIAG] Responses API 0 toolUrls - output structure: ${JSON.stringify(outputSummary).slice(0, 800)}`);
+        }
+        
         return [...new Set(urls)];
     }
     // Anthropic: web_search_tool_result blocks
