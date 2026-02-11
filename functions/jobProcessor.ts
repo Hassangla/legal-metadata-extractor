@@ -1676,6 +1676,15 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // so treat observed server-side tool calls as valid search execution.
                         // For Kimi: if we observed tool calls during the echo loop, trust that search worked
                         // even if the final response doesn't have tool_calls in it.
+                        //
+                        // ALSO: for Responses API, check if the model's text content mentions URLs
+                        // even if extractToolUrlsFromResponse didn't find structured ones.
+                        if (searchActuallyWorked && toolUrls.length === 0 && content) {
+                            const contentUrls = extractUrlsFromText(content);
+                            for (const u of contentUrls) {
+                                if (isSafeHttpUrl(u) && !toolUrls.includes(u)) toolUrls.push(u);
+                            }
+                        }
                         if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal && !sawServerToolCall))) {
                             searchActuallyWorked = false;
                         }
