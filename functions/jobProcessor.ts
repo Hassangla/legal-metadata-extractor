@@ -1848,6 +1848,29 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
 
 
+                        // ── NORMALIZE evidence fields that might be arrays → strings ──
+                        if (parsed?.evidence) {
+                            const stringFields = [
+                                'URLs_Considered', 'Selected_Source_URLs', 'Final_Instrument_URL',
+                                'Source_Tier', 'Public_Access', 'Raw_Official_Title_As_Source',
+                                'Normalized_Title_Used', 'Language_Justification', 'Instrument_URL_Support',
+                                'Enactment_Support', 'EntryIntoForce_Support', 'Status_Support',
+                                'Missing_Conflict_Reason', 'Normalization_Notes',
+                                'Final_Language_Doc', 'Final_Instrument_Full_Name_Original_Language',
+                                'Final_Instrument_Published_Name', 'Final_Enactment_Date',
+                                'Final_Date_of_Entry_in_Force', 'Final_Repeal_Year',
+                                'Final_Current_Status', 'Final_Public', 'Final_Flag',
+                            ];
+                            for (const f of stringFields) {
+                                const val = parsed.evidence[f];
+                                if (Array.isArray(val)) {
+                                    parsed.evidence[f] = val.join('; ');
+                                } else if (val !== undefined && val !== null && typeof val !== 'string') {
+                                    parsed.evidence[f] = String(val);
+                                }
+                            }
+                        }
+
                         // ── INJECT TOOL URLs INTO EVIDENCE ──
                         // When the provider actually performed web search (toolUrls > 0) but the
                         // model left evidence URL fields empty (common with Responses API where
