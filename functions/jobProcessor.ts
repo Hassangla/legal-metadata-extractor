@@ -1315,30 +1315,37 @@ ${specText}`;
                         // Build user prompt — conditional on whether real web search is available
                         let searchInstructions;
                         if (hasRealWebSearch) {
-                            searchInstructions = `SEARCH QUERIES — use the web search tool to research:
+                            searchInstructions = `YOU HAVE WEB SEARCH — YOU MUST USE IT. Do NOT skip searching. Do NOT say "search not available". You MUST perform actual web searches before answering.
 
-MANDATORY MULTILINGUAL SEARCH PROTOCOL:
-- Query_1 MUST be in English: ${query1}
-- At least ONE of Query_2 or Query_3 MUST be rewritten and executed in the official/original language/script of the economy or instrument, translating legal terms and using the local instrument title if known. This is NOT optional — failure to search in the local language often misses the primary legal instrument.
-- Default English versions (rewrite at least one in local language):
-  Query_2: ${query2}
-  Query_3: ${query3}
+MANDATORY SEARCH PROTOCOL — Execute ALL of these searches:
+
+SEARCH 1 (English): ${query1}
+SEARCH 2 (English or local language): ${query2}
+SEARCH 3 (English or local language): ${query3}
+
+At least ONE of Search 2 or Search 3 MUST be rewritten and executed in the official/original language/script of the economy (e.g. German for Switzerland, Thai for Thailand, Arabic for Syria). This is NOT optional.
 
 Examples of required multilingual queries:
-- Syria, nationality law → Arabic: "قانون الجنسية السوري" "المرسوم التشريعي رقم 276 لعام 1969"
-- Slovenia, Agricultural Land Act → Slovenian: "Zakon o kmetijskih zemljiščih"
-- Japan, Companies Act → Japanese: "会社法"
-- Thailand, Nationality Act → Thai: "พระราชบัญญัติสัญชาติ"
-- Brazil, Civil Code → Portuguese: "Código Civil" "Lei nº 10.406"
-Record the actual multilingual query string you used in the Query_2 or Query_3 evidence field.
+- Switzerland → German: "Kinder- und Jugendhilfegesetz Zürich 2011"
+- Syria → Arabic: "قانون الجنسية السوري"
+- Slovenia → Slovenian: "Zakon o kmetijskih zemljiščih"
+- Japan → Japanese: "会社法"
+- Thailand → Thai: "พระราชบัญญัติสัญชาติ"
+- Brazil → Portuguese: "Código Civil" "Lei nº 10.406"
 
-INSTRUCTIONS:
-1. Search using the queries above (English + at least one local-language query). Stop early only if Tier 1-2 sources clearly answer the needed fields.
-2. Identify the best source (prefer Tier 1 official government, then Tier 2 legal databases, then Tier 3, etc.).
-3. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
-4. Determine Final_Language_Doc (language of official publication), Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status.
-5. For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, keep the normalized title as-is (DO NOT translate). Otherwise provide an English name.
-6. Record all evidence, URLs considered, tier, and reasoning.`;
+AFTER SEARCHING — follow these steps:
+1. Review ALL search results. Collect every relevant URL you find.
+2. List ALL URLs you found in URLs_Considered (semicolon-separated).
+3. Select the best URLs and list them in Selected_Source_URLs.
+4. Rank sources by tier: Tier 1 = official government sites (.gov, parliament, gazette), Tier 2 = legal databases (FAO/FAOLEX, ILO/NATLEX, WorldBank), Tier 3 = law firm sites, Tier 4 = news/Wikipedia, Tier 5 = model knowledge only.
+5. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
+6. Set Final_Instrument_URL to the best URL from your search results.
+7. Determine Final_Language_Doc, Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status from the sources.
+8. For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, keep the normalized title as-is. Otherwise provide an English name.
+9. Record all evidence and reasoning.
+10. Set Source_Tier to the tier number of your best source.
+
+CRITICAL: URLs_Considered and Selected_Source_URLs MUST NOT be empty if you performed searches. Copy the URLs from your search results into these fields.`;
                         } else {
                             searchInstructions = `NOTE: Web search is NOT available for this request. Do NOT attempt to call any search tool.
 
