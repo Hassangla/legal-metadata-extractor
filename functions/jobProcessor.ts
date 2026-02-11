@@ -1483,12 +1483,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     bodyObj.messages.push(assistantMsg);
 
                                     for (const tc of toolCalls) {
+                                        const toolContent = tc.function?.arguments || JSON.stringify({ status: 'ok' });
                                         bodyObj.messages.push({
                                             role: 'tool',
                                             tool_call_id: tc.id,
                                             name: tc.function?.name || '$web_search',
-                                            content: tc.function?.arguments || JSON.stringify({ status: 'ok' }),
+                                            content: toolContent,
                                         });
+                                        kimiToolResultContents.push(toolContent);
                                     }
                                     continue;
                                 }
