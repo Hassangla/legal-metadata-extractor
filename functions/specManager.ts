@@ -299,14 +299,28 @@ Deno.serve(async (req) => {
                 
                 const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
                 if (versions.length === 0) {
-                    return Response.json({ error: 'No spec versions found' }, { status: 404 });
+                    // Self-heal historical records where a Spec exists but no version rows were saved.
+                    const seededVersion = await base44.entities.SpecVersion.create({
+                        spec_id: specs[0].id,
+                        version_number: 1,
+                        spec_text: specs[0].current_text || DEFAULT_SPEC,
+                        change_note: 'Auto-seeded missing spec version',
+                        created_by_email: user.email
+                    });
+
+                    return Response.json({
+                        version_id: seededVersion.id,
+                        version_number: seededVersion.version_number
+                    });
                 }
-                
-                versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
+
+                const latestVersion = versions.reduce((latest, current) => {
+                    return (current.version_number || 0) > (latest.version_number || 0) ? current : latest;
+                }, versions[0]);
                 
                 return Response.json({ 
-                    version_id: versions[0].id,
-                    version_number: versions[0].version_number
+                    version_id: latestVersion.id,
+                    version_number: latestVersion.version_number
                 });
             }
             
