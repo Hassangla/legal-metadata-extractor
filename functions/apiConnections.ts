@@ -522,20 +522,10 @@ Deno.serve(async (req) => {
 
             case 'list': {
                 const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
-                // Fetch all models once instead of per-connection to avoid N+1 queries
-                const allModels = await base44.entities.ModelCatalog.list();
-                const modelsByConn = {};
-                for (const m of allModels) {
-                    if (!modelsByConn[m.connection_id]) modelsByConn[m.connection_id] = { total: 0, webSearch: 0 };
-                    modelsByConn[m.connection_id].total++;
-                    if (m.supports_web_search === true) modelsByConn[m.connection_id].webSearch++;
-                }
                 const enriched = connections.map(c => ({
                     ...c,
                     api_key_encrypted: undefined,
                     has_key: !!c.api_key_encrypted,
-                    model_count: modelsByConn[c.id]?.total || 0,
-                    web_search_model_count: modelsByConn[c.id]?.webSearch || 0,
                 }));
                 return Response.json({ connections: enriched });
             }
