@@ -1725,7 +1725,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     Economy_Code: economyCode,
                                     Legal_basis_verbatim: legalBasis,
                                     Query_1: query1, Query_2: query2, Query_3: query3,
-                                    URLs_Considered: extractHttpUrlsFromText(content || '').join('; '),
+                                    URLs_Considered: extractUrlsFromText(content || '').join('; '),
                                     Selected_Source_URLs: '',
                                     Source_Tier: '',
                                     Public_Access: '',
