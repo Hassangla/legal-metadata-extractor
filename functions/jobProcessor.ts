@@ -1650,11 +1650,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 if (!toolUrls.includes(u)) toolUrls.push(u);
                             }
                         }
+                        // Diagnostic: log tool URLs found
+                        console.log(`[DIAG] row=${row.row_index} toolUrls=${toolUrls.length}: ${toolUrls.slice(0,5).join(', ')}`);
+
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
                         const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
+
+                        console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
                         // do one retry with an explicit instruction to call $web_search ──
