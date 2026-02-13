@@ -39,7 +39,7 @@ const PRESET_URLS = {
     google:     'https://generativelanguage.googleapis.com',
 };
 
-export default function ConnectionManager({ onSelect, selectedId }) {
+export default function ConnectionManager({ onSelect, selectedId, allowManagement = true }) {
     const [connections, setConnections] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showCreate, setShowCreate] = useState(false);
@@ -161,15 +161,16 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                     <h3 className="text-lg font-semibold text-slate-900">API Connections</h3>
                     <p className="text-sm text-slate-500">Connect to any LLM provider</p>
                 </div>
-                <Dialog open={showCreate} onOpenChange={(open) => { setShowCreate(open); if (!open) { setTestResult(null); setDetectedProvider(null); } }}>
-                    <DialogTrigger asChild>
-                        <Button className="gap-2 bg-slate-900 hover:bg-slate-800">
-                            <Plus className="w-4 h-4" /> Add Connection
-                        </Button>
-                    </DialogTrigger>
-                    <DialogContent className="sm:max-w-lg">
-                        <DialogHeader><DialogTitle>New API Connection</DialogTitle></DialogHeader>
-                        <div className="space-y-4 py-2">
+                {allowManagement && (
+                    <Dialog open={showCreate} onOpenChange={(open) => { setShowCreate(open); if (!open) { setTestResult(null); setDetectedProvider(null); } }}>
+                        <DialogTrigger asChild>
+                            <Button className="gap-2 bg-slate-900 hover:bg-slate-800">
+                                <Plus className="w-4 h-4" /> Add Connection
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-lg">
+                            <DialogHeader><DialogTitle>New API Connection</DialogTitle></DialogHeader>
+                            <div className="space-y-4 py-2">
                             <div>
                                 <Label className="text-xs text-slate-500 mb-2 block">Quick presets</Label>
                                 <div className="flex flex-wrap gap-1.5">
@@ -226,19 +227,20 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                     </AlertDescription>
                                 </Alert>
                             )}
-                            <Button onClick={handleCreate} disabled={creating} className="w-full gap-2">
-                                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                                Test & Create
-                            </Button>
-                        </div>
-                    </DialogContent>
-                </Dialog>
+                                <Button onClick={handleCreate} disabled={creating} className="w-full gap-2">
+                                    {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                                    Test & Create
+                                </Button>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
+                )}
             </div>
             {connections.length === 0 ? (
                 <Card className="border-dashed">
                     <CardContent className="flex flex-col items-center justify-center py-12">
                         <Server className="w-12 h-12 text-slate-300 mb-4" />
-                        <p className="text-slate-500 text-center">No API connections yet. Add one to get started.</p>
+                        <p className="text-slate-500 text-center">No API connections available. Ask the main admin to add one.</p>
                     </CardContent>
                 </Card>
             ) : (
@@ -279,16 +281,20 @@ export default function ConnectionManager({ onSelect, selectedId }) {
                                             ) : (
                                                 <Badge variant="secondary">Untested</Badge>
                                             )}
-                                            <Button variant="ghost" size="icon"
-                                                onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
-                                                disabled={testing === conn.id}>
-                                                {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                            </Button>
-                                            <Button variant="ghost" size="icon"
-                                                onClick={(e) => { e.stopPropagation(); handleDelete(conn.id); }}
-                                                className="text-red-500 hover:text-red-600 hover:bg-red-50">
-                                                <Trash2 className="w-4 h-4" />
-                                            </Button>
+                                            {allowManagement && (
+                                                <>
+                                                    <Button variant="ghost" size="icon"
+                                                        onClick={(e) => { e.stopPropagation(); handleTest(conn.id); }}
+                                                        disabled={testing === conn.id}>
+                                                        {testing === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                    </Button>
+                                                    <Button variant="ghost" size="icon"
+                                                        onClick={(e) => { e.stopPropagation(); handleDelete(conn.id); }}
+                                                        className="text-red-500 hover:text-red-600 hover:bg-red-50">
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                </>
+                                            )}
                                         </div>
                                     </div>
                                 </CardContent>

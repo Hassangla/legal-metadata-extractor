@@ -19,6 +19,7 @@ import FileUploader from '@/components/jobs/FileUploader';
 import JobProgress from '@/components/jobs/JobProgress';
 
 export default function NewRun() {
+    const [user, setUser] = useState(null);
     const [step, setStep] = useState(1);
     const [selectedConnection, setSelectedConnection] = useState(null);
     const [selectedModel, setSelectedModel] = useState(null);
@@ -31,8 +32,11 @@ export default function NewRun() {
     const [taskName, setTaskName] = useState('');
 
     useEffect(() => {
+        base44.auth.me().then(u => setUser(u)).catch(() => {});
         checkSpec();
     }, []);
+
+    const canManageConnections = user?.role === 'admin';
 
     const checkSpec = async () => {
         try {
@@ -211,6 +215,7 @@ export default function NewRun() {
                                 <ConnectionManager 
                                     selectedId={selectedConnection}
                                     onSelect={setSelectedConnection}
+                                    allowManagement={canManageConnections}
                                 />
                             </CardContent>
                         </Card>
