@@ -521,7 +521,9 @@ Deno.serve(async (req) => {
             }
 
             case 'list': {
-                const connections = await base44.entities.APIConnection.filter({ created_by: user.email });
+                // Shared connection catalog: any authenticated user can choose
+                // from connections configured by administrators.
+                const connections = await base44.entities.APIConnection.list();
                 const enriched = connections.map(c => ({
                     ...c,
                     api_key_encrypted: undefined,
