@@ -1140,7 +1140,6 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
-    const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
     const q2 = String(ev.Query_2 || '').trim();
     const q3 = String(ev.Query_3 || '').trim();
     const nonLatin = /[^\x00-\x7F]/;
