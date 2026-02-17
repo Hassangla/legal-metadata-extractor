@@ -1059,6 +1059,9 @@ async function finalizeAndVerify(ev, ctx) {
         addReason(`Language normalized to "${normalizedLanguage}" (English language-name format).`);
     }
 
+    // Declare langDoc early — needed for Final_Instrument_Published_Name normalization
+    const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
+
     // Title normalization rules apply to both Raw/Normalized output title fields as applicable.
     const titleSeed = providedNormalizedTitle || rawTitle;
     if (titleSeed) {
@@ -1079,18 +1082,45 @@ async function finalizeAndVerify(ev, ctx) {
 
     const candidateTitle = (ev.Normalized_Title_Used || rawTitle || '').trim();
 
-    if (!(ev.Final_Instrument_Full_Name_Original_Language || '').trim() && candidateTitle) {
+    // ── Final_Instrument_Full_Name_Original_Language normalization ──
+    const existingOrigLang = (ev.Final_Instrument_Full_Name_Original_Language || '').trim();
+    if (existingOrigLang) {
+        // Field is already populated by LLM — normalize it directly
+        const normalizedOrigLang = normalizeTitleForSpec(existingOrigLang);
+        if (normalizedOrigLang.title !== existingOrigLang) {
+            ev.Final_Instrument_Full_Name_Original_Language = normalizedOrigLang.title;
+            addReason(`Normalized Final_Instrument_Full_Name_Original_Language per Title Normalization Rules.`);
+            if (normalizedOrigLang.notes.length > 0) {
+                const prev = ev.Normalization_Notes ? `${ev.Normalization_Notes}; ` : '';
+                ev.Normalization_Notes = `${prev}OrigLang: ${normalizedOrigLang.notes.join(' ')}`.trim();
+            }
+        }
+    } else if (candidateTitle) {
+        // NO-ORPHAN: promote from evidence
         ev.Final_Instrument_Full_Name_Original_Language = candidateTitle;
         addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Full_Name_Original_Language from Evidence.`);
     }
 
-    if (!(ev.Final_Instrument_Published_Name || '').trim() && candidateTitle) {
+    // ── Final_Instrument_Published_Name normalization ──
+    const existingPubName = (ev.Final_Instrument_Published_Name || '').trim();
+    if (existingPubName) {
+        // Field is already populated by LLM — normalize it directly
+        const normalizedPubName = normalizeTitleForSpec(existingPubName);
+        if (normalizedPubName.title !== existingPubName) {
+            ev.Final_Instrument_Published_Name = normalizedPubName.title;
+            addReason(`Normalized Final_Instrument_Published_Name per Title Normalization Rules.`);
+            if (normalizedPubName.notes.length > 0) {
+                const prev = ev.Normalization_Notes ? `${ev.Normalization_Notes}; ` : '';
+                ev.Normalization_Notes = `${prev}PubName: ${normalizedPubName.notes.join(' ')}`.trim();
+            }
+        }
+    } else if (candidateTitle) {
+        // NO-ORPHAN: promote from evidence
         // For French/Spanish docs, keep original title; otherwise use candidate as-is
-        const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
         if (langDoc === 'french' || langDoc === 'spanish') {
             ev.Final_Instrument_Published_Name = candidateTitle;
             addReason(`NO-ORPHAN: Promoted original-language title into Final_Instrument_Published_Name (${langDoc} — kept as-is per spec).`);
-        } else if (candidateTitle) {
+        } else {
             ev.Final_Instrument_Published_Name = candidateTitle;
             addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Published_Name from Evidence.`);
         }
