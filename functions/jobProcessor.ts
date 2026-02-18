@@ -825,7 +825,7 @@ function stripTitleNoise(title) {
 
     // normalize No format
     cleaned = cleaned
-        .replace(/\b(?:Nº|N°|No|Number|Num\.?|№)\s*[:\-]?\s*/gi, 'No. ')
+        .replace(/\b(?:Nº|N°|No\.?|Number|Num\.?|№)\s*[:\-]?\s*/gi, 'No. ')
         .replace(/\bNo\.\s*No\.\s*/g, 'No. ');
 
     // collapse whitespace & punctuation repeats
@@ -1124,18 +1124,6 @@ async function finalizeAndVerify(ev, ctx) {
             ev.Final_Instrument_Published_Name = candidateTitle;
             addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Published_Name from Evidence.`);
         }
-    }
-
-    // ── French/Spanish guardrail: Published Name must match Original Language Name ──
-    // The LLM often translates French/Spanish titles to English despite instructions.
-    // If langDoc is French or Spanish and we have an original-language title, enforce it.
-    if ((langDoc === 'french' || langDoc === 'spanish')
-        && (ev.Final_Instrument_Full_Name_Original_Language || '').trim()
-        && (ev.Final_Instrument_Published_Name || '').trim()
-        && ev.Final_Instrument_Published_Name.trim() !== ev.Final_Instrument_Full_Name_Original_Language.trim()) {
-        const before = ev.Final_Instrument_Published_Name;
-        ev.Final_Instrument_Published_Name = ev.Final_Instrument_Full_Name_Original_Language;
-        addReason(`French/Spanish guardrail: Overwrote Final_Instrument_Published_Name ("${before.slice(0, 80)}") with Final_Instrument_Full_Name_Original_Language per spec rule — DO NOT translate.`);
     }
 
     if (!(ev.Final_Language_Doc || '').trim() && langJustification) {
