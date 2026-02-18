@@ -794,6 +794,16 @@ const ARTICLE_REFERENCE_REGEXES = [
     /\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi,
 ];
 
+const LEGAL_TERM_TRANSLATIONS = {
+    'aviso': 'Notice', 'decreto': 'Decree', 'lei': 'Law', 'código': 'Code',
+    'regulamento': 'Regulation', 'portaria': 'Ordinance', 'resolução': 'Resolution',
+    'gesetz': 'Law', 'verordnung': 'Regulation', 'erlass': 'Decree',
+    'qanun': 'Law', 'nizam': 'Regulation', 'qarar': 'Decision',
+    'legge': 'Law', 'regolamento': 'Regulation', 'decreto-legge': 'Decree-Law',
+    'ustawa': 'Law', 'rozporządzenie': 'Regulation',
+    'закон': 'Law', 'указ': 'Decree', 'постановление': 'Resolution',
+};
+
 const INLINE_DATE_REGEXES = [
     /,?\s*(?:dated\s+)?\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/gi,
     /,?\s*(?:de\s+)?\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+(?:\s+de\s+\d{4})?/gi,
@@ -826,7 +836,8 @@ function stripTitleNoise(title) {
     // normalize No format
     cleaned = cleaned
         .replace(/\b(?:N\.?[º°]|No\.?(?![a-zA-ZÀ-ÿ])|Number|Num\.?|№)\s*[:\-]?\s*/gi, 'No. ')
-        .replace(/\bNo\.\s*No\.\s*/g, 'No. ');
+        .replace(/\bNo\.\s*No\.\s*/g, 'No. ')
+        .replace(/\.{2,}/g, '.');
 
     // collapse whitespace & punctuation repeats
     cleaned = cleaned
@@ -1088,7 +1099,7 @@ async function finalizeAndVerify(ev, ctx) {
     if (existingOrigLang) {
         // Field is already populated by LLM — normalize it directly
         const normalizedOrigLang = normalizeTitleForSpec(existingOrigLang);
-        if (normalizedOrigLang.title !== existingOrigLang) {
+        if (normalizedOrigLang.title && normalizedOrigLang.title !== existingOrigLang) {
             ev.Final_Instrument_Full_Name_Original_Language = normalizedOrigLang.title;
             addReason(`Normalized Final_Instrument_Full_Name_Original_Language per Title Normalization Rules.`);
             if (normalizedOrigLang.notes.length > 0) {
@@ -1107,7 +1118,7 @@ async function finalizeAndVerify(ev, ctx) {
     if (existingPubName) {
         // Field is already populated by LLM — normalize it directly
         const normalizedPubName = normalizeTitleForSpec(existingPubName);
-        if (normalizedPubName.title !== existingPubName) {
+        if (normalizedPubName.title && normalizedPubName.title !== existingPubName) {
             ev.Final_Instrument_Published_Name = normalizedPubName.title;
             addReason(`Normalized Final_Instrument_Published_Name per Title Normalization Rules.`);
             if (normalizedPubName.notes.length > 0) {
@@ -1171,6 +1182,15 @@ async function finalizeAndVerify(ev, ctx) {
                 || origLang.includes(pubName);
             if (likelyUntranslated) {
                 addReason(`Translation guardrail: Final_Instrument_Published_Name appears to be in ${resolvedLangDoc} instead of English. The LLM may not have translated the title as required by the spec for non-French/Spanish documents.`);
+                
+                // Attempt basic legal-term translation for Published Name
+                const pubWordsArr = pubName.split(/\s+/);
+                const firstWordLower = (pubWordsArr[0] || '').toLowerCase();
+                if (LEGAL_TERM_TRANSLATIONS[firstWordLower]) {
+                    pubWordsArr[0] = LEGAL_TERM_TRANSLATIONS[firstWordLower];
+                    ev.Final_Instrument_Published_Name = pubWordsArr.join(' ');
+                    addReason(`Server-side translation: replaced "${firstWordLower}" with "${LEGAL_TERM_TRANSLATIONS[firstWordLower]}" in Final_Instrument_Published_Name.`);
+                }
             }
         }
     }
