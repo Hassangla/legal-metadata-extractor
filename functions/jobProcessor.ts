@@ -1563,7 +1563,7 @@ AFTER SEARCHING — follow these steps:
 5. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
 6. Set Final_Instrument_URL to the best URL from your search results.
 7. Determine Final_Language_Doc, Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status from the sources.
-8. For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, keep the normalized title as-is. Otherwise provide an English name.
+8. CRITICAL: For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, you MUST keep the normalized original-language title as-is — DO NOT translate it to English. Only provide an English name if the language is NOT French or Spanish.
 9. Record all evidence and reasoning.
 10. Set Source_Tier to the tier number of your best source.
 
