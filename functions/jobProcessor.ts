@@ -883,8 +883,10 @@ function normalizeLanguageDoc(rawLanguage) {
     const val = String(rawLanguage || '').trim();
     if (!val) return '';
     const lower = val.toLowerCase();
+    // Strip parenthetical qualifiers: "French (translated to English)" → "french"
+    const coreLang = lower.replace(/\s*\([^)]*\)/g, '').trim();
 
-    if ((/pashto/.test(lower) && /dari/.test(lower)) || /\b(dari\s*\/\s*pashto|pashto\s*\/\s*dari)\b/i.test(val)) {
+    if ((/pashto/.test(coreLang) && /dari/.test(coreLang)) || /\b(dari\s*\/\s*pashto|pashto\s*\/\s*dari)\b/i.test(val)) {
         return 'Pashto / Dari';
     }
 
@@ -895,10 +897,9 @@ function normalizeLanguageDoc(rawLanguage) {
         pashto: 'Pashto',
         dari: 'Dari',
     };
-    if (map[lower]) return map[lower];
+    if (map[coreLang]) return map[coreLang];
 
-    return val
-        .toLowerCase()
+    return coreLang
         .split(/\s+/)
         .map(w => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ');
@@ -1156,12 +1157,21 @@ async function finalizeAndVerify(ev, ctx) {
 
     // ── Translation compliance guardrail: non-French/Spanish titles should be in English ──
     // Spec requires English translation for all languages except French and Spanish.
-    // Detect when LLM failed to translate by checking if Published Name matches Original Name.
+    // Detect when LLM failed to translate by checking if Published Name matches or partially matches Original Name.
     if (resolvedLangDoc && resolvedLangDoc !== 'english' && resolvedLangDoc !== 'french' && resolvedLangDoc !== 'spanish') {
         const origLang = (ev.Final_Instrument_Full_Name_Original_Language || '').trim();
         const pubName = (ev.Final_Instrument_Published_Name || '').trim();
-        if (origLang && pubName && origLang === pubName) {
-            addReason(`Translation guardrail: Final_Instrument_Published_Name appears to be in ${resolvedLangDoc} instead of English. The LLM may not have translated the title as required by the spec for non-French/Spanish documents.`);
+        if (origLang && pubName) {
+            const origWords = origLang.split(/\s+/).slice(0, 4).join(' ').toLowerCase();
+            const pubWords = pubName.split(/\s+/).slice(0, 4).join(' ').toLowerCase();
+            const likelyUntranslated = origLang === pubName
+                || pubName.startsWith(origWords.split(/\s+/).slice(0, 2).join(' '))
+                || origLang.startsWith(pubWords.split(/\s+/).slice(0, 2).join(' '))
+                || pubName.includes(origLang)
+                || origLang.includes(pubName);
+            if (likelyUntranslated) {
+                addReason(`Translation guardrail: Final_Instrument_Published_Name appears to be in ${resolvedLangDoc} instead of English. The LLM may not have translated the title as required by the spec for non-French/Spanish documents.`);
+            }
         }
     }
 
