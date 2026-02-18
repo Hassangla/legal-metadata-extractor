@@ -1115,20 +1115,14 @@ async function finalizeAndVerify(ev, ctx) {
             }
         }
     } else if (candidateTitle) {
-        // NO-ORPHAN: promote from evidence ONLY for French/Spanish/English/unknown languages.
-        // Spec requires English translation for all other languages (Portuguese, Arabic, etc.).
-        // Server cannot translate; if LLM didn't provide English, leave blank per spec.
+        // NO-ORPHAN: promote from evidence
+        // For French/Spanish docs, keep original title; otherwise use candidate as-is
         if (langDoc === 'french' || langDoc === 'spanish') {
             ev.Final_Instrument_Published_Name = candidateTitle;
             addReason(`NO-ORPHAN: Promoted original-language title into Final_Instrument_Published_Name (${langDoc} — kept as-is per spec).`);
-        } else if (langDoc === 'english' || !langDoc) {
-            // English or unknown — safe to promote
+        } else {
             ev.Final_Instrument_Published_Name = candidateTitle;
             addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Published_Name from Evidence.`);
-        } else {
-            // Non-French/Spanish foreign language — do NOT promote original-language title.
-            // Spec requires English; server cannot translate; LLM must provide English name.
-            addReason(`NO-ORPHAN: Did NOT promote original-language title into Final_Instrument_Published_Name. Spec requires English translation for ${langDoc} documents; evidence only has original language; server cannot translate.`);
         }
     }
 
@@ -1168,23 +1162,6 @@ async function finalizeAndVerify(ev, ctx) {
         const pubName = (ev.Final_Instrument_Published_Name || '').trim();
         if (origLang && pubName && origLang === pubName) {
             addReason(`Translation guardrail: Final_Instrument_Published_Name appears to be in ${resolvedLangDoc} instead of English. The LLM may not have translated the title as required by the spec for non-French/Spanish documents.`);
-        }
-    }
-
-    // ── Portuguese keyword guardrail: blank Published Name if it contains Portuguese keywords ──
-    // Portuguese documents must have English Published Name per spec. If Published Name contains
-    // Portuguese legal keywords, it was not translated correctly — blank it to prevent wrong output.
-    if (resolvedLangDoc === 'portuguese' && (ev.Final_Instrument_Published_Name || '').trim()) {
-        const pubNameLower = ev.Final_Instrument_Published_Name.toLowerCase();
-        const portugueseKeywords = [
-            'aviso', 'decreto', 'lei', 'portaria', 'resolução', 'resolucao',
-            'regulamento', 'despacho', 'código', 'codigo', 'constituição', 'constituicao'
-        ];
-        const hasPortugueseKeyword = portugueseKeywords.some(kw => pubNameLower.includes(kw));
-        if (hasPortugueseKeyword) {
-            const before = ev.Final_Instrument_Published_Name;
-            ev.Final_Instrument_Published_Name = '';
-            addReason(`Portuguese keyword guardrail: Blanked Final_Instrument_Published_Name ("${before.slice(0, 80)}") — contains Portuguese keywords; spec requires English translation for non-French/Spanish documents.`);
         }
     }
 
