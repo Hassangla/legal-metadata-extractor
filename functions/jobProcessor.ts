@@ -1140,6 +1140,20 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
+    // ── French/Spanish guardrail: Published Name must match Original Language Name ──
+    // The LLM often translates French/Spanish titles to English despite instructions.
+    // If langDoc is French or Spanish and we have an original-language title, enforce it.
+    // Reads language fresh here (after NO-ORPHAN extraction may have populated it).
+    const resolvedLangDoc = (ev.Final_Language_Doc || '').toLowerCase();
+    if ((resolvedLangDoc === 'french' || resolvedLangDoc === 'spanish')
+        && (ev.Final_Instrument_Full_Name_Original_Language || '').trim()
+        && (ev.Final_Instrument_Published_Name || '').trim()
+        && ev.Final_Instrument_Published_Name.trim() !== ev.Final_Instrument_Full_Name_Original_Language.trim()) {
+        const before = ev.Final_Instrument_Published_Name;
+        ev.Final_Instrument_Published_Name = ev.Final_Instrument_Full_Name_Original_Language;
+        addReason(`French/Spanish guardrail: Overwrote Final_Instrument_Published_Name ("${before.slice(0, 80)}") with Final_Instrument_Full_Name_Original_Language per spec rule — DO NOT translate.`);
+    }
+
     const q2 = String(ev.Query_2 || '').trim();
     const q3 = String(ev.Query_3 || '').trim();
     const nonLatin = /[^\x00-\x7F]/;
