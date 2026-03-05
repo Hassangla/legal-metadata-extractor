@@ -1559,8 +1559,8 @@ AFTER SEARCHING — follow these steps:
 1. Review ALL search results. Collect every relevant URL you find.
 2. List ALL URLs you found in URLs_Considered (semicolon-separated).
 3. Select the best URLs and list them in Selected_Source_URLs.
-4. Rank sources by tier: Tier 1 = official government sites (.gov, parliament, gazette), Tier 2 = legal databases (FAO/FAOLEX, ILO/NATLEX, WorldBank), Tier 3 = law firm sites, Tier 4 = news/Wikipedia, Tier 5 = model knowledge only.
-5. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
+4. Follow the source tier definitions in the spec exactly.
+5. Extract the official title in original language/script. Normalize it per the Title Normalization Rules. For Final_Language_Doc, use the English name (e.g., "Portuguese", "Spanish", "French") — never endonyms or ISO codes.
 6. Set Final_Instrument_URL to the best URL from your search results.
 7. Determine Final_Language_Doc, Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status from the sources.
 8. CRITICAL: For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish ONLY, keep the normalized original-language title as-is — DO NOT translate to English. IMPORTANT: Portuguese is NOT Spanish and is NOT exempt from translation — Portuguese instruments MUST have an English Published Name. For all other languages (including Portuguese, Arabic, German, Slovenian, etc.), provide an English name.
