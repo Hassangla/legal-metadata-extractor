@@ -855,8 +855,8 @@ function normalizeTitleForSpec(rawTitle) {
 
     let title = stripTitleNoise(original);
 
-    const hasLawNumber = /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi)\b[^\n]*\bNo\.\s*[A-Za-z0-9./\-]+/i.test(title)
-        || /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi)\b[^\n]*\b\d+[A-Za-z0-9./\-]*/i.test(title);
+    const hasLawNumber = /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi|lei|portaria|resolu[cç][aã]o|decreto-lei|medida\s+provis[oó]ria|instru[cç][aã]o\s+normativa)\b[^\n]*\bNo\.\s*[A-Za-z0-9./\-]+/i.test(title)
+        || /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi|lei|portaria|resolu[cç][aã]o|decreto-lei|medida\s+provis[oó]ria|instru[cç][aã]o\s+normativa)\b[^\n]*\b\d+[A-Za-z0-9./\-]*/i.test(title);
 
     if (hasLawNumber) {
         const beforeDate = title;
@@ -1138,59 +1138,48 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
-    if (!(ev.Final_Language_Doc || '').trim() && langJustification) {
-        // Light-touch extraction: look for clear language mention(s)
+    if (!(ev.Final_Language_Doc||'').trim() && langJustification) {
         if (/pashto/i.test(langJustification) && /dari/i.test(langJustification)) {
             ev.Final_Language_Doc = 'Pashto / Dari';
-            addReason('NO-ORPHAN: Extracted bilingual language "Pashto / Dari" from Language_Justification.');
+            addReason('NO-ORPHAN: Extracted bilingual "Pashto / Dari" from Language_Justification.');
         } else {
-            const langMatch = langJustification.match(/\b(Arabic|French|Spanish|Portuguese|Chinese|Japanese|Korean|Russian|German|Italian|Dutch|Turkish|Thai|Hindi|Urdu|Malay|Indonesian|Vietnamese|Slovenian|Croatian|Serbian|Czech|Slovak|Polish|Hungarian|Romanian|Bulgarian|Greek|Hebrew|Farsi|Persian|Dari|Pashto|Swahili|Amharic|Tigrinya|Khmer|Lao|Burmese|Georgian|Armenian|Azerbaijani|Uzbek|Kazakh|Kyrgyz|Tajik|Mongolian|Nepali|Bengali|Sinhala|Tamil|Telugu|Kannada|Malayalam|Gujarati|Marathi|Punjabi|English)\b/i);
-            if (langMatch) {
-                ev.Final_Language_Doc = langMatch[1].charAt(0).toUpperCase() + langMatch[1].slice(1).toLowerCase();
-                addReason(`NO-ORPHAN: Extracted language "${ev.Final_Language_Doc}" from Language_Justification.`);
-            }
+            const lm = langJustification.match(/\b(Arabic|French|Spanish|Portuguese|Chinese|Japanese|Korean|Russian|German|Italian|Dutch|Turkish|Thai|Hindi|Urdu|Malay|Indonesian|Vietnamese|Slovenian|Croatian|Serbian|Czech|Slovak|Polish|Hungarian|Romanian|Bulgarian|Greek|Hebrew|Farsi|Persian|Dari|Pashto|Swahili|Amharic|Tigrinya|Khmer|Lao|Burmese|Georgian|Armenian|Azerbaijani|Uzbek|Kazakh|Kyrgyz|Tajik|Mongolian|Nepali|Bengali|Sinhala|Tamil|Telugu|Kannada|Malayalam|Gujarati|Marathi|Punjabi|English)\b/i);
+            if (lm) { ev.Final_Language_Doc = lm[1].charAt(0).toUpperCase() + lm[1].slice(1).toLowerCase(); addReason(`NO-ORPHAN: Language "${ev.Final_Language_Doc}" from Language_Justification.`); }
         }
     }
 
-    // ── French/Spanish guardrail: Published Name must match Original Language Name ──
-    // The LLM often translates French/Spanish titles to English despite instructions.
-    // If langDoc is French or Spanish and we have an original-language title, enforce it.
-    // Reads language fresh here (after NO-ORPHAN extraction may have populated it).
+    // ── Portuguese/Spanish disambiguation — MUST run before French/Spanish guardrail ──
+    // Portuguese is often misidentified as Spanish. Override if economy or title indicates Portuguese.
+    if ((ev.Final_Language_Doc||'').toLowerCase() === 'spanish') {
+        const _pt = (ev.Final_Instrument_Full_Name_Original_Language||ev.Normalized_Title_Used||'').trim();
+        if (isPortugueseSpeakingEconomy(ctx.economy) || /\bLei\b/i.test(_pt) || /ção\b/i.test(_pt) || /[ãõ]/.test(_pt) || /\bPortaria\b/i.test(_pt) || /\bResolu[cç][aã]o\b/i.test(_pt) || /\bAviso\b/i.test(_pt) || /\bDecreto-Lei\b/i.test(_pt)) {
+            ev.Final_Language_Doc = 'Portuguese';
+            addReason(`Portuguese/Spanish disambiguation: Economy "${ctx.economy||''}" or title markers indicate Portuguese — overriding Spanish.`);
+        }
+    }
+
+    // ── French/Spanish guardrail (ONLY French/Spanish — Portuguese is NOT exempt from translation) ──
     const resolvedLangDoc = (ev.Final_Language_Doc || '').toLowerCase();
     if ((resolvedLangDoc === 'french' || resolvedLangDoc === 'spanish')
-        && (ev.Final_Instrument_Full_Name_Original_Language || '').trim()
-        && (ev.Final_Instrument_Published_Name || '').trim()
+        && (ev.Final_Instrument_Full_Name_Original_Language||'').trim()
+        && (ev.Final_Instrument_Published_Name||'').trim()
         && ev.Final_Instrument_Published_Name.trim() !== ev.Final_Instrument_Full_Name_Original_Language.trim()) {
         const before = ev.Final_Instrument_Published_Name;
         ev.Final_Instrument_Published_Name = ev.Final_Instrument_Full_Name_Original_Language;
-        addReason(`French/Spanish guardrail: Overwrote Final_Instrument_Published_Name ("${before.slice(0, 80)}") with Final_Instrument_Full_Name_Original_Language per spec rule — DO NOT translate.`);
+        addReason(`French/Spanish guardrail: Overwrote Published Name ("${before.slice(0,80)}") with Original Language Name — DO NOT translate.`);
     }
 
-    // ── Translation compliance guardrail: non-French/Spanish titles should be in English ──
-    // Spec requires English translation for all languages except French and Spanish.
-    // Detect when LLM failed to translate by checking if Published Name matches or partially matches Original Name.
+    // ── Translation compliance: non-French/Spanish titles (including Portuguese) must be in English ──
     if (resolvedLangDoc && resolvedLangDoc !== 'english' && resolvedLangDoc !== 'french' && resolvedLangDoc !== 'spanish') {
-        const origLang = (ev.Final_Instrument_Full_Name_Original_Language || '').trim();
-        const pubName = (ev.Final_Instrument_Published_Name || '').trim();
+        const origLang = (ev.Final_Instrument_Full_Name_Original_Language||'').trim();
+        const pubName = (ev.Final_Instrument_Published_Name||'').trim();
         if (origLang && pubName) {
-            const origWords = origLang.split(/\s+/).slice(0, 4).join(' ').toLowerCase();
-            const pubWords = pubName.split(/\s+/).slice(0, 4).join(' ').toLowerCase();
-            const likelyUntranslated = origLang === pubName
-                || pubName.startsWith(origWords.split(/\s+/).slice(0, 2).join(' '))
-                || origLang.startsWith(pubWords.split(/\s+/).slice(0, 2).join(' '))
-                || pubName.includes(origLang)
-                || origLang.includes(pubName);
-            if (likelyUntranslated) {
-                addReason(`Translation guardrail: Final_Instrument_Published_Name appears to be in ${resolvedLangDoc} instead of English. The LLM may not have translated the title as required by the spec for non-French/Spanish documents.`);
-                
-                // Attempt basic legal-term translation for Published Name
-                const pubWordsArr = pubName.split(/\s+/);
-                const firstWordLower = (pubWordsArr[0] || '').toLowerCase();
-                if (LEGAL_TERM_TRANSLATIONS[firstWordLower]) {
-                    pubWordsArr[0] = LEGAL_TERM_TRANSLATIONS[firstWordLower];
-                    ev.Final_Instrument_Published_Name = pubWordsArr.join(' ');
-                    addReason(`Server-side translation: replaced "${firstWordLower}" with "${LEGAL_TERM_TRANSLATIONS[firstWordLower]}" in Final_Instrument_Published_Name.`);
-                }
+            const o2 = origLang.split(/\s+/).slice(0,2).join(' ').toLowerCase();
+            const p2 = pubName.split(/\s+/).slice(0,2).join(' ').toLowerCase();
+            if (origLang===pubName || pubName.startsWith(o2) || origLang.startsWith(p2) || pubName.includes(origLang) || origLang.includes(pubName)) {
+                addReason(`Translation guardrail: Published Name appears to be in ${resolvedLangDoc} instead of English.`);
+                const pwArr = pubName.split(/\s+/), fw = (pwArr[0]||'').toLowerCase();
+                if (LEGAL_TERM_TRANSLATIONS[fw]) { pwArr[0]=LEGAL_TERM_TRANSLATIONS[fw]; ev.Final_Instrument_Published_Name=pwArr.join(' '); addReason(`Server-side: "${fw}" → "${LEGAL_TERM_TRANSLATIONS[fw]}" in Published Name.`); }
             }
         }
     }
@@ -1229,53 +1218,30 @@ async function finalizeAndVerify(ev, ctx) {
     return ev;
 }
 
+// ── PORTUGUESE-SPEAKING ECONOMIES ───────────────────────────
+const PORTUGUESE_SPEAKING_ECONOMIES = new Set([
+    'brazil', 'brasil', 'portugal', 'angola', 'mozambique', 'moçambique',
+    'cabo verde', 'cape verde', 'guinea-bissau', 'guiné-bissau',
+    'timor-leste', 'east timor', 'são tomé and príncipe', 'sao tome and principe',
+]);
+function isPortugueseSpeakingEconomy(e) { return !!e && PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim()); }
+
 // ── ECONOMY ALIASES ─────────────────────────────────────────
-// Common alternate names/spellings for economies
 const ECONOMY_ALIASES = {
-    'ivory coast': "Côte d'Ivoire",
-    'cote divoire': "Côte d'Ivoire",
-    'cote d ivoire': "Côte d'Ivoire",
-    'south korea': 'Korea, Rep.',
-    'republic of korea': 'Korea, Rep.',
-    'north korea': "Korea, Dem. People's Rep.",
-    'democratic republic of the congo': 'Congo, Dem. Rep.',
-    'drc': 'Congo, Dem. Rep.',
-    'republic of congo': 'Congo, Rep.',
-    'czech republic': 'Czechia',
-    'swaziland': 'Eswatini',
-    'burma': 'Myanmar',
-    'holland': 'Netherlands',
-    'usa': 'United States',
-    'united states of america': 'United States',
-    'uk': 'United Kingdom',
-    'great britain': 'United Kingdom',
-    'russia': 'Russian Federation',
-    'iran': 'Iran, Islamic Rep.',
-    'syria': 'Syrian Arab Republic',
-    'venezuela': 'Venezuela, RB',
-    'egypt': 'Egypt, Arab Rep.',
-    'yemen': 'Yemen, Rep.',
-    'laos': 'Lao PDR',
-    'slovakia': 'Slovak Republic',
-    'macedonia': 'North Macedonia',
-    'cape verde': 'Cabo Verde',
-    'east timor': 'Timor-Leste',
-    'gambia': 'Gambia, The',
-    'bahamas': 'Bahamas, The',
-    'taiwan': 'Taiwan, China',
-    'hong kong': 'Hong Kong SAR, China',
-    'macau': 'Macao SAR, China',
-    'macao': 'Macao SAR, China',
-    'palestine': 'West Bank and Gaza',
-    'brunei': 'Brunei Darussalam',
-    'micronesia': 'Micronesia, Fed. Sts.',
-    'vietnam': 'Viet Nam',
-    'kyrgyzstan': 'Kyrgyz Republic',
-    'st. lucia': 'St. Lucia',
-    'saint lucia': 'St. Lucia',
-    'st. kitts': 'St. Kitts and Nevis',
-    'saint kitts': 'St. Kitts and Nevis',
-    'st. vincent': 'St. Vincent and the Grenadines',
+    'ivory coast': "Côte d'Ivoire", 'cote divoire': "Côte d'Ivoire", 'cote d ivoire': "Côte d'Ivoire",
+    'south korea': 'Korea, Rep.', 'republic of korea': 'Korea, Rep.', 'north korea': "Korea, Dem. People's Rep.",
+    'democratic republic of the congo': 'Congo, Dem. Rep.', 'drc': 'Congo, Dem. Rep.', 'republic of congo': 'Congo, Rep.',
+    'czech republic': 'Czechia', 'swaziland': 'Eswatini', 'burma': 'Myanmar', 'holland': 'Netherlands',
+    'usa': 'United States', 'united states of america': 'United States', 'uk': 'United Kingdom',
+    'great britain': 'United Kingdom', 'russia': 'Russian Federation', 'iran': 'Iran, Islamic Rep.',
+    'syria': 'Syrian Arab Republic', 'venezuela': 'Venezuela, RB', 'egypt': 'Egypt, Arab Rep.',
+    'yemen': 'Yemen, Rep.', 'laos': 'Lao PDR', 'slovakia': 'Slovak Republic', 'macedonia': 'North Macedonia',
+    'cape verde': 'Cabo Verde', 'east timor': 'Timor-Leste', 'gambia': 'Gambia, The', 'bahamas': 'Bahamas, The',
+    'taiwan': 'Taiwan, China', 'hong kong': 'Hong Kong SAR, China', 'macau': 'Macao SAR, China',
+    'macao': 'Macao SAR, China', 'palestine': 'West Bank and Gaza', 'brunei': 'Brunei Darussalam',
+    'micronesia': 'Micronesia, Fed. Sts.', 'vietnam': 'Viet Nam', 'kyrgyzstan': 'Kyrgyz Republic',
+    'st. lucia': 'St. Lucia', 'saint lucia': 'St. Lucia', 'st. kitts': 'St. Kitts and Nevis',
+    'saint kitts': 'St. Kitts and Nevis', 'st. vincent': 'St. Vincent and the Grenadines',
     'saint vincent': 'St. Vincent and the Grenadines',
 };
 
@@ -1606,7 +1572,7 @@ AFTER SEARCHING — follow these steps:
 5. Extract the official title in original language/script. Normalize it per the Title Normalization Rules.
 6. Set Final_Instrument_URL to the best URL from your search results.
 7. Determine Final_Language_Doc, Final_Enactment_Date, Final_Date_of_Entry_in_Force, Final_Current_Status from the sources.
-8. CRITICAL: For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish, you MUST keep the normalized original-language title as-is — DO NOT translate it to English. Only provide an English name if the language is NOT French or Spanish.
+8. CRITICAL: For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish ONLY, keep the normalized original-language title as-is — DO NOT translate to English. IMPORTANT: Portuguese is NOT Spanish and is NOT exempt from translation — Portuguese instruments MUST have an English Published Name. For all other languages (including Portuguese, Arabic, German, Slovenian, etc.), provide an English name.
 9. Record all evidence and reasoning.
 10. Set Source_Tier to the tier number of your best source.
 
