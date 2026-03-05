@@ -16,7 +16,7 @@ The Economy_Code is provided pre-looked-up from the economy codes database. Do n
 All final decision values are stored as Final_* keys within the single "evidence" JSON object. There is NO separate "output" object.
 1. Final_Language_Doc — language of the official publication copy. Write language name in English (e.g., Arabic, French). If bilingual: 'Pashto / Dari'. Justify in evidence fields.
 2. Final_Instrument_Full_Name_Original_Language — normalized official title in the original language/script (see Title Normalization Rules)
-3. Final_Instrument_Published_Name — if Final_Language_Doc is French or Spanish: use normalized title as-is (DO NOT translate). Otherwise: English name (prefer official English title; else careful translation).
+3. Final_Instrument_Published_Name — if Final_Language_Doc is French or Spanish ONLY: use normalized title as-is (DO NOT translate). Portuguese is NOT Spanish and is NOT exempt from translation. For Portuguese and all other non-French/non-Spanish languages: provide an English name (prefer official English title; else careful translation).
 4. Final_Instrument_URL — single best URL supporting the instrument. TOOL-DEPENDENT: requires web search. Prefer same source used for title/metadata. Prefer higher tiers.
 5. Final_Enactment_Date — enactment/adoption/promulgation date. TOOL-DEPENDENT: requires web search. Format: YYYY-MM-DD when known; YYYY if only year.
 6. Final_Date_of_Entry_in_Force — effective date. TOOL-DEPENDENT: requires web search. If 'effective on publication date', use publication date. If 'effective X days after publication', compute and record calculation in Evidence. If unclear, leave blank.
@@ -36,6 +36,7 @@ Row_Index | Economy | Economy_Code | Legal_basis_verbatim | Query_1 | Query_2 | 
 3. Use web search for research when a search tool is available. If NO search tool is available, you MUST leave ALL TOOL-DEPENDENT fields blank (empty string), set Final_Flag="No sources", and record the limitation in Missing_Conflict_Reason. Do NOT use training knowledge for TOOL-DEPENDENT fields.
 4. Escalate sources only as needed: Tier 1 → Tier 2 → Tier 3 → Tier 4 → Tier 5.
 5. Date formats: YYYY-MM-DD when known; YYYY if only year known.
+6. Language identification: Portuguese is NOT Spanish. For Portuguese-speaking economies (Brazil, Portugal, Angola, Mozambique, Cabo Verde, Guinea-Bissau, Timor-Leste, São Tomé and Príncipe), identify the language as Portuguese unless the document provides clear contrary evidence. Portuguese instruments MUST have an English Final_Instrument_Published_Name; only French and Spanish are exempt from translation.
 
 ## SECTION: Source Tiers
 Tier 1 (official/primary): Official gazette; parliament/ministry/government legal portal; official consolidated legal database; official government domains.
