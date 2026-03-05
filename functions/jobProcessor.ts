@@ -852,41 +852,16 @@ function normalizeTitleForSpec(rawTitle) {
     const notes = [];
     const original = String(rawTitle || '').trim();
     if (!original) return { title: '', notes };
-
     let title = stripTitleNoise(original);
-
-    const hasLawNumber = /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi|lei|portaria|resolu[cç][aã]o|decreto-lei|medida\s+provis[oó]ria|instru[cç][aã]o\s+normativa)\b[^\n]*\bNo\.\s*[A-Za-z0-9./\-]+/i.test(title)
-        || /\b(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi|lei|portaria|resolu[cç][aã]o|decreto-lei|medida\s+provis[oó]ria|instru[cç][aã]o\s+normativa)\b[^\n]*\b\d+[A-Za-z0-9./\-]*/i.test(title);
-
-    if (hasLawNumber) {
-        const beforeDate = title;
-        for (const rx of INLINE_DATE_REGEXES) {
-            title = title.replace(rx, '');
-        }
-        if (title !== beforeDate) {
-            notes.push('Removed inline date phrase because instrument number already identifies the title.');
-        }
-    }
-
-    const upperRatio = original.replace(/[^A-Za-z]/g, '').length > 0
-        ? (original.replace(/[^A-Z]/g, '').length / original.replace(/[^A-Za-z]/g, '').length)
-        : 0;
-    if (upperRatio > 0.85) {
-        title = title
-            .toLowerCase()
-            .replace(/\b\w/g, (c) => c.toUpperCase());
-        notes.push('Normalized capitalization from all-caps style.');
-    }
-
-    title = title
-        .replace(/\s{2,}/g, ' ')
-        .replace(/\s+,/g, ',')
-        .trim();
-
-    if (title !== original) {
-        notes.unshift('Normalized title to remove parentheticals/article references/non-essential phrasing and standardize numbering as "No.".');
-    }
-
+    // Insert "No." after Ley/Loi/Lei when bare number follows — never translates the word.
+    if(!/\b(?:No\.|Nº|N°|Num\.?)\s*\d/i.test(title)){title=title.replace(/\b(Ley|Loi|Lei)(\s+)(\d)/g,(_,w,s,d)=>`${w} No. ${d}`);}
+    const INST_PAT=`(?:law|decree|act|ordinance|order|regulation|code|ley|decreto|arrêté|loi|lei|portaria|resolu[cç][aã]o|decreto-lei|medida\\s+provis[oó]ria|instru[cç][aã]o\\s+normativa)`;
+    const hasLawNumber=new RegExp(`\\b${INST_PAT}\\b[^\\n]*\\bNo\\.\\s*[A-Za-z0-9./\\-]+`,'i').test(title)||new RegExp(`\\b${INST_PAT}\\b[^\\n]*\\b\\d+[A-Za-z0-9./\\-]*`,'i').test(title);
+    if (hasLawNumber) { const bd=title; for (const rx of INLINE_DATE_REGEXES) { title=title.replace(rx,''); } if(title!==bd) notes.push('Removed inline date phrase because instrument number already identifies the title.'); }
+    const upperRatio=original.replace(/[^A-Za-z]/g,'').length>0?(original.replace(/[^A-Z]/g,'').length/original.replace(/[^A-Za-z]/g,'').length):0;
+    if(upperRatio>0.85){title=title.toLowerCase().replace(/\b\w/g,(c)=>c.toUpperCase());notes.push('Normalized capitalization from all-caps style.');}
+    title=title.replace(/\s{2,}/g,' ').replace(/\s+,/g,',').trim();
+    if(title!==original) notes.unshift('Normalized title to remove parentheticals/article references/non-essential phrasing and standardize numbering as "No.".');
     return { title, notes };
 }
 
@@ -1070,13 +1045,12 @@ async function finalizeAndVerify(ev, ctx) {
     // Declare langDoc early — needed for Final_Instrument_Published_Name normalization
     const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
 
-    // Anti-translation guardrail: if model returned English-ified normalization but raw title is Spanish/French, rebuild.
+    // Anti-translation guardrail: rebuild Normalized_Title_Used from raw if model translated Spanish/French instrument type.
     const _lg=(ev.Final_Language_Doc||'').toLowerCase(),_rg=(ev.Raw_Official_Title_As_Source||'').trim(),_ng=(ev.Normalized_Title_Used||'').trim();
-    if(_rg&&_ng&&/\b(?:Law|Act|Decree|Regulation|Code)\b/i.test(_ng)){if(_lg==='spanish'&&/\bLey\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used from raw to preserve Spanish.'].filter(Boolean).join('; ');}else if(_lg==='french'&&/\bLoi\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used from raw to preserve French.'].filter(Boolean).join('; ');}}
+    if(_rg&&_ng&&/\b(?:Law|Act|Decree|Regulation|Code)\b/i.test(_ng)){if(_lg==='spanish'&&/\bLey\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used to preserve Spanish.'].filter(Boolean).join('; ');}else if(_lg==='french'&&/\bLoi\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used to preserve French.'].filter(Boolean).join('; ');}}
     // Title normalization rules apply to both Raw/Normalized output title fields as applicable.
     const titleSeed=(ev.Normalized_Title_Used||'').trim()||rawTitle;
     if(titleSeed){const normalized=normalizeTitleForSpec(titleSeed);if(!ev.Normalized_Title_Used||normalized.title!==ev.Normalized_Title_Used){ev.Normalized_Title_Used=normalized.title;}if(!ev.Raw_Official_Title_As_Source&&normalized.title){ev.Raw_Official_Title_As_Source=titleSeed;}if(normalized.notes.length>0){const prev=ev.Normalization_Notes?`${ev.Normalization_Notes}; `:'';ev.Normalization_Notes=`${prev}${normalized.notes.join(' ')}`.trim();}}
-
     const candidateTitle = (ev.Normalized_Title_Used || rawTitle || '').trim();
 
     // ── Final_Instrument_Full_Name_Original_Language normalization ──
