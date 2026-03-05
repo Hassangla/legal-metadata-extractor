@@ -902,18 +902,14 @@ function normalizeLanguageDoc(rawLanguage) {
     }
 
     const map = {
-        arabic: 'Arabic',
-        french: 'French',
-        spanish: 'Spanish',
-        pashto: 'Pashto',
-        dari: 'Dari',
+        arabic:'Arabic',
+        french:'French','français':'French',francais:'French',fr:'French','fr-fr':'French',
+        spanish:'Spanish','español':'Spanish',espanol:'Spanish',es:'Spanish','es-es':'Spanish','es-419':'Spanish','spanish (latin america)':'Spanish',
+        portuguese:'Portuguese','português':'Portuguese',portugues:'Portuguese',pt:'Portuguese','pt-br':'Portuguese',pt_br:'Portuguese','pt-pt':'Portuguese','portuguese (brazil)':'Portuguese',
+        pashto:'Pashto',dari:'Dari',
     };
     if (map[coreLang]) return map[coreLang];
-
-    return coreLang
-        .split(/\s+/)
-        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ');
+    return coreLang.split(/\s+/).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
 }
 
 // ── FINALIZE AND VERIFY (spec enforcement) ──────────────────
@@ -1149,14 +1145,7 @@ async function finalizeAndVerify(ev, ctx) {
     }
 
     // ── Portuguese/Spanish disambiguation — MUST run before French/Spanish guardrail ──
-    // Portuguese is often misidentified as Spanish. Override if economy or title indicates Portuguese.
-    if ((ev.Final_Language_Doc||'').toLowerCase() === 'spanish') {
-        const _pt = (ev.Final_Instrument_Full_Name_Original_Language||ev.Normalized_Title_Used||'').trim();
-        if (isPortugueseSpeakingEconomy(ctx.economy) || /\bLei\b/i.test(_pt) || /ção\b/i.test(_pt) || /[ãõ]/.test(_pt) || /\bPortaria\b/i.test(_pt) || /\bResolu[cç][aã]o\b/i.test(_pt) || /\bAviso\b/i.test(_pt) || /\bDecreto-Lei\b/i.test(_pt)) {
-            ev.Final_Language_Doc = 'Portuguese';
-            addReason(`Portuguese/Spanish disambiguation: Economy "${ctx.economy||''}" or title markers indicate Portuguese — overriding Spanish.`);
-        }
-    }
+    if ((ev.Final_Language_Doc||'').toLowerCase()==='spanish'){const _t=(ev.Final_Instrument_Full_Name_Original_Language||ev.Normalized_Title_Used||ev.Raw_Official_Title_As_Source||'').trim();if(isPortugueseSpeakingEconomy(ctx.economy)||hasPortugueseMarkers(_t)){ev.Final_Language_Doc='Portuguese';addReason('Language corrected to Portuguese (Portuguese economy/title markers; model likely misidentified as Spanish).');}}
 
     // ── French/Spanish guardrail (ONLY French/Spanish — Portuguese is NOT exempt from translation) ──
     const resolvedLangDoc = (ev.Final_Language_Doc || '').toLowerCase();
@@ -1220,11 +1209,13 @@ async function finalizeAndVerify(ev, ctx) {
 
 // ── PORTUGUESE-SPEAKING ECONOMIES ───────────────────────────
 const PORTUGUESE_SPEAKING_ECONOMIES = new Set([
-    'brazil', 'brasil', 'portugal', 'angola', 'mozambique', 'moçambique',
-    'cabo verde', 'cape verde', 'guinea-bissau', 'guiné-bissau',
-    'timor-leste', 'east timor', 'são tomé and príncipe', 'sao tome and principe',
+    'brazil','brasil','portugal','angola','mozambique','moçambique',
+    'cabo verde','cape verde','guinea-bissau','guinea bissau','guiné-bissau',
+    'timor-leste','timor leste','east timor',
+    'são tomé and príncipe','sao tome and principe','sao tome',
 ]);
-function isPortugueseSpeakingEconomy(e) { return !!e && PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim()); }
+function isPortugueseSpeakingEconomy(e){if(!e)return false;const n=e.toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();return PORTUGUESE_SPEAKING_ECONOMIES.has(n)||PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim());}
+function hasPortugueseMarkers(t){return!!t&&(/\bLei\b/i.test(t)||/\bPortaria\b/i.test(t)||/\bResolu[cç][aã]o\b/i.test(t)||/\bDecreto-?Lei\b/i.test(t)||/[ãõ]/.test(t)||/ção\b/i.test(t));}
 
 // ── ECONOMY ALIASES ─────────────────────────────────────────
 const ECONOMY_ALIASES = {
@@ -2125,6 +2116,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             providerType,
                             modelId: job.model_id,
                         });
+
+                        // ── PORTUGUESE TRANSLATION FALLBACK ──
+                        if((ev.Final_Language_Doc||'').toLowerCase()==='portuguese'){const ptO=(ev.Final_Instrument_Full_Name_Original_Language||'').trim(),ptP=(ev.Final_Instrument_Published_Name||'').trim();if(ptO&&(!ptP||ptP===ptO||hasPortugueseMarkers(ptP)||/\bde \d{1,2} de [A-Za-záéíóúãõç]+ de \d{4}\b/i.test(ptP))){try{const tR=buildLLMRequest(providerType,job.model_id,'You translate legal instrument titles to English accurately.',`Translate this title to English. Output ONLY the translated title, no quotes, no commentary:\n${ptO}`,'none',conn.base_url,apiKey);const tResp=await fetchWithRetry(tR.url,tR.init);const tData=await tResp.json();const tText=extractTextContent(providerType,tData,tR.isResponsesApi||false).trim().replace(/^["'\s]+|["'\s]+$/g,'');if(tText&&tText.length>0&&tText!==ptO){ev.Final_Instrument_Published_Name=tText;ev.Missing_Conflict_Reason=[ev.Missing_Conflict_Reason,'Portuguese translation fallback: Published Name translated to English.'].filter(Boolean).join('; ');ev['Missing/Conflict_Reason']=ev.Missing_Conflict_Reason;}}catch(_){}}}
 
                         // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
                         const outputJson = {
