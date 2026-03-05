@@ -1045,32 +1045,20 @@ async function finalizeAndVerify(ev, ctx) {
     // Declare langDoc early — needed for Final_Instrument_Published_Name normalization
     const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
 
-    // Anti-translation guardrail: rebuild Normalized_Title_Used from raw if model translated Spanish/French instrument type.
-    const _lg=(ev.Final_Language_Doc||'').toLowerCase(),_rg=(ev.Raw_Official_Title_As_Source||'').trim(),_ng=(ev.Normalized_Title_Used||'').trim();
-    if(_rg&&_ng&&/\b(?:Law|Act|Decree|Regulation|Code)\b/i.test(_ng)){if(_lg==='spanish'&&/\bLey\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used to preserve Spanish.'].filter(Boolean).join('; ');}else if(_lg==='french'&&/\bLoi\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used to preserve French.'].filter(Boolean).join('; ');}}
-    // Title normalization rules apply to both Raw/Normalized output title fields as applicable.
-    const titleSeed=(ev.Normalized_Title_Used||'').trim()||rawTitle;
-    if(titleSeed){const normalized=normalizeTitleForSpec(titleSeed);if(!ev.Normalized_Title_Used||normalized.title!==ev.Normalized_Title_Used){ev.Normalized_Title_Used=normalized.title;}if(!ev.Raw_Official_Title_As_Source&&normalized.title){ev.Raw_Official_Title_As_Source=titleSeed;}if(normalized.notes.length>0){const prev=ev.Normalization_Notes?`${ev.Normalization_Notes}; `:'';ev.Normalization_Notes=`${prev}${normalized.notes.join(' ')}`.trim();}}
-    const candidateTitle = (ev.Normalized_Title_Used || rawTitle || '').trim();
+    // ── A2: For Spanish/French, always derive Normalized_Title_Used from raw (prevents translation). ──
+    // For all other languages apply standard normalization.
+    const isSpanishOrFrench=(langDoc==='spanish'||langDoc==='french');
+    if(isSpanishOrFrench&&rawTitle){const nfr=normalizeTitleForSpec(rawTitle);if(nfr.title){ev.Normalized_Title_Used=nfr.title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),`Normalized_Title_Used from raw for ${langDoc} (prevent translation).`].filter(Boolean).join('; ');}}
+    else{const _ng=(ev.Normalized_Title_Used||'').trim(),ts=_ng||rawTitle;if(ts){const nn=normalizeTitleForSpec(ts);if(!ev.Normalized_Title_Used||nn.title!==ev.Normalized_Title_Used)ev.Normalized_Title_Used=nn.title;if(!ev.Raw_Official_Title_As_Source&&nn.title)ev.Raw_Official_Title_As_Source=ts;if(nn.notes.length>0){const p=ev.Normalization_Notes?`${ev.Normalization_Notes}; `:'';ev.Normalization_Notes=`${p}${nn.notes.join(' ')}`.trim();}}}
+    const candidateTitle=(ev.Normalized_Title_Used||rawTitle||'').trim();
 
     // ── Final_Instrument_Full_Name_Original_Language normalization ──
-    const existingOrigLang = (ev.Final_Instrument_Full_Name_Original_Language || '').trim();
-    if (existingOrigLang) {
-        // Field is already populated by LLM — normalize it directly
-        const normalizedOrigLang = normalizeTitleForSpec(existingOrigLang);
-        if (normalizedOrigLang.title && normalizedOrigLang.title !== existingOrigLang) {
-            ev.Final_Instrument_Full_Name_Original_Language = normalizedOrigLang.title;
-            addReason(`Normalized Final_Instrument_Full_Name_Original_Language per Title Normalization Rules.`);
-            if (normalizedOrigLang.notes.length > 0) {
-                const prev = ev.Normalization_Notes ? `${ev.Normalization_Notes}; ` : '';
-                ev.Normalization_Notes = `${prev}OrigLang: ${normalizedOrigLang.notes.join(' ')}`.trim();
-            }
-        }
-    } else if (candidateTitle) {
-        // NO-ORPHAN: promote from evidence
-        ev.Final_Instrument_Full_Name_Original_Language = candidateTitle;
-        addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0, 60)}" into Final_Instrument_Full_Name_Original_Language from Evidence.`);
-    }
+    const existingOrigLang=(ev.Final_Instrument_Full_Name_Original_Language||'').trim();
+    if(existingOrigLang){const nol=normalizeTitleForSpec(existingOrigLang);if(nol.title&&nol.title!==existingOrigLang){ev.Final_Instrument_Full_Name_Original_Language=nol.title;addReason('Normalized Final_Instrument_Full_Name_Original_Language per Title Normalization Rules.');if(nol.notes.length>0){const p=ev.Normalization_Notes?`${ev.Normalization_Notes}; `:'';ev.Normalization_Notes=`${p}OrigLang: ${nol.notes.join(' ')}`.trim();}}}
+    else if(candidateTitle){ev.Final_Instrument_Full_Name_Original_Language=candidateTitle;addReason(`NO-ORPHAN: Promoted "${candidateTitle.slice(0,60)}" into Final_Instrument_Full_Name_Original_Language from Evidence.`);}
+
+    // ── A3: Safety override — correct translated English title for Spanish/French ──
+    if(isSpanishOrFrench&&rawTitle&&/\b(?:Law|Act|Decree|Regulation|Code)\b/i.test(ev.Final_Instrument_Full_Name_Original_Language||'')){const cor=normalizeTitleForSpec(rawTitle).title;if(cor){ev.Final_Instrument_Full_Name_Original_Language=cor;addReason(`Corrected Final_Instrument_Full_Name_Original_Language from raw to preserve ${langDoc} (prevent translated title).`);}}
 
     // ── Final_Instrument_Published_Name normalization ──
     const existingPubName = (ev.Final_Instrument_Published_Name || '').trim();
