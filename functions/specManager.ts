@@ -78,6 +78,8 @@ Examples:
 6. Numbering format: always 'No.' — when a bare number follows the instrument type word with no "No." token, insert it: "Ley 5742" → "Ley No. 5742". Do NOT translate instrument-type words: "Ley/Loi/Lei" must remain as-is (never "Law"). Example: "Ley 5742" → "Ley No. 5742" (NOT "Law No. 5742").
 7. Capitalization: normalize consistently (avoid ALL CAPS).
 8. Record all changes in Normalization_Notes.
+9. Normalization must NOT translate instrument-type words. Keep original-language words such as Ley/Loi/Lei. "Ley 5742" → "Ley No. 5742" (NOT "Law No. 5742").
+10. Normalized_Title_Used must be in the original language/script. For Spanish/French documents, never replace the original-language title with an English translation in this field.
 
 ## SECTION: Evidence-to-Output Synchronization (NO-ORPHAN Rule)
 Every populated Final_* value must be supported by evidence. If any Final_* field is blank but evidence contains a usable candidate, you MUST populate it (promote from evidence) or explain why not in Missing_Conflict_Reason. Specifically:
