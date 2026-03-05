@@ -1070,23 +1070,12 @@ async function finalizeAndVerify(ev, ctx) {
     // Declare langDoc early — needed for Final_Instrument_Published_Name normalization
     const langDoc = (ev.Final_Language_Doc || '').toLowerCase();
 
+    // Anti-translation guardrail: if model returned English-ified normalization but raw title is Spanish/French, rebuild.
+    const _lg=(ev.Final_Language_Doc||'').toLowerCase(),_rg=(ev.Raw_Official_Title_As_Source||'').trim(),_ng=(ev.Normalized_Title_Used||'').trim();
+    if(_rg&&_ng&&/\b(?:Law|Act|Decree|Regulation|Code)\b/i.test(_ng)){if(_lg==='spanish'&&/\bLey\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used from raw to preserve Spanish.'].filter(Boolean).join('; ');}else if(_lg==='french'&&/\bLoi\b/i.test(_rg)){ev.Normalized_Title_Used=normalizeTitleForSpec(_rg).title;ev.Normalization_Notes=[(ev.Normalization_Notes||''),'Rebuilt Normalized_Title_Used from raw to preserve French.'].filter(Boolean).join('; ');}}
     // Title normalization rules apply to both Raw/Normalized output title fields as applicable.
-    const titleSeed = providedNormalizedTitle || rawTitle;
-    if (titleSeed) {
-        const normalized = normalizeTitleForSpec(titleSeed);
-        if (!providedNormalizedTitle || normalized.title !== providedNormalizedTitle) {
-            ev.Normalized_Title_Used = normalized.title;
-        }
-
-        if (!ev.Raw_Official_Title_As_Source && normalized.title) {
-            ev.Raw_Official_Title_As_Source = titleSeed;
-        }
-
-        if (normalized.notes.length > 0) {
-            const prev = ev.Normalization_Notes ? `${ev.Normalization_Notes}; ` : '';
-            ev.Normalization_Notes = `${prev}${normalized.notes.join(' ')}`.trim();
-        }
-    }
+    const titleSeed=(ev.Normalized_Title_Used||'').trim()||rawTitle;
+    if(titleSeed){const normalized=normalizeTitleForSpec(titleSeed);if(!ev.Normalized_Title_Used||normalized.title!==ev.Normalized_Title_Used){ev.Normalized_Title_Used=normalized.title;}if(!ev.Raw_Official_Title_As_Source&&normalized.title){ev.Raw_Official_Title_As_Source=titleSeed;}if(normalized.notes.length>0){const prev=ev.Normalization_Notes?`${ev.Normalization_Notes}; `:'';ev.Normalization_Notes=`${prev}${normalized.notes.join(' ')}`.trim();}}
 
     const candidateTitle = (ev.Normalized_Title_Used || rawTitle || '').trim();
 
