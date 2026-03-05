@@ -75,7 +75,7 @@ Examples:
 3. Remove Article references: 'Property Code, Arts. 37 and 40' → 'Property Code'.
 4. Remove dates when law number already identifies it: 'Ley Organica 10/1995, de 23 de noviembre, del Codigo Penal' → 'Ley Organica 10/1995'.
 5. Remove country names and non-essential phrases; remove 'the' before English law names.
-6. Numbering format: always 'No.'
+6. Numbering format: always 'No.' — when a bare number follows the instrument type word with no "No." token, insert it: "Ley 5742" → "Ley No. 5742". Do NOT translate instrument-type words: "Ley/Loi/Lei" must remain as-is (never "Law"). Example: "Ley 5742" → "Ley No. 5742" (NOT "Law No. 5742").
 7. Capitalization: normalize consistently (avoid ALL CAPS).
 8. Record all changes in Normalization_Notes.
 
