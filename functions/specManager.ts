@@ -14,7 +14,7 @@ The Economy_Code is provided pre-looked-up from the economy codes database. Do n
 
 ## SECTION: Output / Final Decision Fields (stored as Final_* keys inside the evidence object)
 All final decision values are stored as Final_* keys within the single "evidence" JSON object. There is NO separate "output" object.
-1. Final_Language_Doc — language of the official publication copy. Write language name in English (e.g., Arabic, French). If bilingual: 'Pashto / Dari'. Justify in evidence fields.
+1. Final_Language_Doc — language of the official publication copy. Write the English language name (e.g., Portuguese, Spanish, French, Arabic) — do NOT use endonyms (Português, Español, Français) or ISO codes (pt-BR, es, fr). If bilingual: 'Pashto / Dari'. Justify in evidence fields.
 2. Final_Instrument_Full_Name_Original_Language — normalized official title in the original language/script (see Title Normalization Rules)
 3. Final_Instrument_Published_Name — if Final_Language_Doc is French or Spanish ONLY: use normalized title as-is (DO NOT translate). Portuguese is NOT Spanish and is NOT exempt from translation. For Portuguese and all other non-French/non-Spanish languages: provide an English name (prefer official English title; else careful translation).
 4. Final_Instrument_URL — single best URL supporting the instrument. TOOL-DEPENDENT: requires web search. Prefer same source used for title/metadata. Prefer higher tiers.
