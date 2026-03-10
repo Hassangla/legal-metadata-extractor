@@ -3,47 +3,6 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 const BATCH_SIZE = 3;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
-const ENTITY_RETRY_ATTEMPTS = 5;
-const ENTITY_RETRY_BASE_MS = 500;
-const ENTITY_CREATE_CHUNK_SIZE = 50;
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-function isRateLimitError(err) { return /rate.?limit|429|too many requests/i.test(String(err?.message || err || '')); }
-async function withEntityRetry(fn, attempts = ENTITY_RETRY_ATTEMPTS) {
-    let lastErr;
-    for (let attempt = 0; attempt <= attempts; attempt++) {
-        try { return await fn(); } catch (err) { lastErr = err; if (!isRateLimitError(err) || attempt === attempts) throw err; await sleep(ENTITY_RETRY_BASE_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 250)); }
-    }
-    throw lastErr;
-}
-function chunkArray(items, size) { const chunks = []; for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size)); return chunks; }
-
-async function runKimiSearchLoop(url, init, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls, _providerType) {
-    let data;
-    const messages = JSON.parse(init.body).messages || [];
-    for (let round = 0; round < 6; round++) {
-        const body = JSON.parse(init.body);
-        body.messages = messages;
-        const resp = await fetchWithRetry(url, { method: 'POST', headers: init.headers, body: JSON.stringify(body) });
-        data = await resp.json();
-        if (data.usage) { inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0; outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0; }
-        const msg = data.choices?.[0]?.message;
-        if (!msg) break;
-        const embeddedCalls = parseKimiToolCallsFromText(msg.content || '');
-        const toolCalls = (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ? msg.tool_calls : embeddedCalls;
-        if (toolCalls.length > 0) {
-            kimiObservedToolCalls = true;
-            messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls || [] });
-            for (const tc of toolCalls) {
-                let args; try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
-                messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function?.name || '$web_search', content: JSON.stringify({ query: args.query || args.keywords || '', results: [] }) });
-                for (const u of extractUrlsFromText(tc.function?.arguments || '')) { if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u); }
-            }
-            continue;
-        }
-        break;
-    }
-    return { data, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls };
-}
 
 // ── PROVIDER CHAT CONFIGS ───────────────────────────────────
 
@@ -1362,8 +1321,14 @@ Deno.serve(async (req) => {
                 });
 
                 if (input_rows?.length) {
-                    const rowPayloads = input_rows.map((row, i) => ({ job_id: job.id, row_index: i + 1, input_data: row, status: 'pending' }));
-                    for (const chunk of chunkArray(rowPayloads, ENTITY_CREATE_CHUNK_SIZE)) { await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk)); await sleep(200); }
+                    for (let i = 0; i < input_rows.length; i++) {
+                        await base44.entities.JobRow.create({
+                            job_id: job.id,
+                            row_index: i + 1,
+                            input_data: input_rows[i],
+                            status: 'pending',
+                        });
+                    }
                 }
 
                 return Response.json({ job });
@@ -1440,20 +1405,26 @@ Deno.serve(async (req) => {
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
-                const pendingRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', effectiveBatchSize, 0, ['id', 'row_index', 'input_data', 'status']));
+                const allRows = await base44.entities.JobRow.filter({ job_id });
+                const pendingRows = allRows
+                    .filter((r) => r.status === 'pending')
+                    .sort((a, b) => a.row_index - b.row_index)
+                    .slice(0, effectiveBatchSize);
 
                 if (!pendingRows.length) {
-                    const doneJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows, progress_json: { ...(job.progress_json || {}), pending: 0, processing: 0, done: job.total_rows || 0 } }));
-                    return Response.json({ job: doneJob, message: 'All rows processed' });
+                    await base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows });
+                    return Response.json({ job: { ...job, status: 'done' }, message: 'All rows processed' });
                 }
 
                 let processedCount = 0;
-                let batchInputTokens = 0;
-                let batchOutputTokens = 0;
-                let batchErrorCount = 0;
+
+                // Helper to add delay between rows to avoid Base44 SDK rate limits
+                const interRowDelay = async () => {
+                    await new Promise(r => setTimeout(r, 500));
+                };
 
                 for (const row of pendingRows) {
-                    if (processedCount > 0) await sleep(500);
+                    if (processedCount > 0) await interRowDelay();
                     try {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data || {};
@@ -1626,7 +1597,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         let inputTokens = 0;
                         let outputTokens = 0;
 
+                        // Kimi uses an echo-based tool-call loop: the client echoes
+                        // $web_search arguments back, and Moonshot's server performs
+                        // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
+
                         let kimiObservedToolUrls = [];
                         let kimiObservedToolCalls = false;
 
@@ -1634,12 +1609,22 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                           ({ data, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls } = await runKimiSearchLoop(url, init, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls, providerType));
                         } else {
                           try {
+                            // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
                             const resp = await fetchWithRetry(url, init);
                             data = await resp.json();
 
                             // Responses API may return 200 with status != 'completed'
                             if (isResponsesApi && data.status === 'failed') {
                                 throw new Error(`Responses API failed: ${JSON.stringify(data.error || data.incomplete_details || 'unknown').slice(0, 300)}`);
+                            }
+
+                            // Diagnostic: log Responses API structure to understand web search behavior
+                            if (isResponsesApi) {
+                                const outputTypes = Array.isArray(data.output) ? data.output.map(i => `${i.type}${i.status ? ':' + i.status : ''}`).join(', ') : 'no-output';
+                                console.log(`[DIAG] Responses API row=${row.row_index}: status=${data.status}, output_types=[${outputTypes}], has_output_text=${!!data.output_text}`);
+                                // Log the request URL and whether tools were sent
+                                const reqBody = JSON.parse(init.body);
+                                console.log(`[DIAG] Request: model=${reqBody.model}, tools=${JSON.stringify(reqBody.tools)}, url=${url}`);
                             }
 
                             if (data.usage) {
@@ -1662,25 +1647,67 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
 
+                        // Diagnostic: log what we got from the LLM
+                        console.log(`[DIAG] row=${row.row_index} provider=${providerType} isResponsesApi=${isResponsesApi} contentLen=${(content||'').length} contentPreview=${(content||'').slice(0,200)}`);
+
+                        // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
-                        if (isKimiSearch && kimiObservedToolUrls.length > 0) { for (const u of kimiObservedToolUrls) { if (!toolUrls.includes(u)) toolUrls.push(u); } }
+                        if (isKimiSearch && kimiObservedToolUrls.length > 0) {
+                            for (const u of kimiObservedToolUrls) {
+                                if (!toolUrls.includes(u)) toolUrls.push(u);
+                            }
+                        }
+                        // Diagnostic: log tool URLs found
+                        console.log(`[DIAG] row=${row.row_index} toolUrls=${toolUrls.length}: ${toolUrls.slice(0,5).join(', ')}`);
+
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
                         const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
 
-                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search' && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
+                        console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
+
+                        // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
+                        // do one retry with an explicit instruction to call $web_search ──
+                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
+                            && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
                             try {
                                 const retryBodyObj = JSON.parse(init.body);
-                                retryBodyObj.messages = [{ role: 'system', content: 'You MUST use the $web_search tool. Call it now.' }, { role: 'user', content: `Search the web using $web_search for: ${query1}` }];
+                                // Remove previous conversation; send a fresh short prompt
+                                retryBodyObj.messages = [
+                                    { role: 'system', content: 'You MUST use the $web_search tool. Call it now.' },
+                                    { role: 'user', content: `Search the web using $web_search for: ${query1}` },
+                                ];
                                 retryBodyObj.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
                                 retryBodyObj.tool_choice = { type: 'builtin_function', function: { name: '$web_search' } };
-                                delete retryBodyObj.thinking; retryBodyObj.max_tokens = 256; retryBodyObj.temperature = 1;
-                                const retryData = await (await fetchWithRetry(url, { method: 'POST', headers: init.headers, body: JSON.stringify(retryBodyObj) })).json();
-                                for (const u of extractToolUrlsFromResponse(providerType, retryData, false)) { if (!toolUrls.includes(u)) toolUrls.push(u); }
-                            } catch (_) {}
+                                delete retryBodyObj.thinking;
+                                retryBodyObj.max_tokens = 256;
+                                retryBodyObj.temperature = 1;
+                                const retryResp = await fetchWithRetry(url, {
+                                    method: 'POST',
+                                    headers: init.headers,
+                                    body: JSON.stringify(retryBodyObj),
+                                });
+                                const retryData = await retryResp.json();
+                                const retryToolUrls = extractToolUrlsFromResponse(providerType, retryData, false);
+                                if (retryToolUrls.length > 0) {
+                                    // Merge retry tool URLs into the main set
+                                    for (const u of retryToolUrls) {
+                                        if (!toolUrls.includes(u)) toolUrls.push(u);
+                                    }
+                                }
+                            } catch (_) { /* non-fatal retry */ }
                         }
+
+                        // Downgrade search availability if tool silently failed or returned no URLs.
+                        // Kimi can execute $web_search without exposing URL citations in every response,
+                        // so treat observed server-side tool calls as valid search execution.
+                        // For Kimi: if we observed tool calls during the echo loop, trust that search worked
+                        // even if the final response doesn't have tool_calls in it.
+                        //
+                        // ALSO: for Responses API, check if the model's text content mentions URLs
+                        // even if extractToolUrlsFromResponse didn't find structured ones.
                         if (searchActuallyWorked && toolUrls.length === 0 && content) {
                             const contentUrls = extractUrlsFromText(content);
                             for (const u of contentUrls) {
@@ -1693,7 +1720,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let parsed = extractJSON(content);
 
+                        // ── NORMALIZE any model output format into { evidence: { ...all fields + Final_* } } ──
+
                         if (parsed) {
+                            // Format 1: { "output": {...}, "evidence": {...} } — old spec-style
                             if (parsed.output && !parsed.evidence?.Final_Flag) {
                                 const o = parsed.output;
                                 const e = parsed.evidence || {};
@@ -1795,11 +1825,34 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
 
 
+                        // ── NORMALIZE evidence fields that might be arrays → strings ──
                         if (parsed?.evidence) {
-                            const _sf = ['URLs_Considered','Selected_Source_URLs','Final_Instrument_URL','Source_Tier','Public_Access','Raw_Official_Title_As_Source','Normalized_Title_Used','Language_Justification','Instrument_URL_Support','Enactment_Support','EntryIntoForce_Support','Status_Support','Missing_Conflict_Reason','Normalization_Notes','Final_Language_Doc','Final_Instrument_Full_Name_Original_Language','Final_Instrument_Published_Name','Final_Enactment_Date','Final_Date_of_Entry_in_Force','Final_Repeal_Year','Final_Current_Status','Final_Public','Final_Flag'];
-                            for (const f of _sf) { const val = parsed.evidence[f]; if (Array.isArray(val)) parsed.evidence[f] = val.join('; '); else if (val !== undefined && val !== null && typeof val !== 'string') parsed.evidence[f] = String(val); }
+                            const stringFields = [
+                                'URLs_Considered', 'Selected_Source_URLs', 'Final_Instrument_URL',
+                                'Source_Tier', 'Public_Access', 'Raw_Official_Title_As_Source',
+                                'Normalized_Title_Used', 'Language_Justification', 'Instrument_URL_Support',
+                                'Enactment_Support', 'EntryIntoForce_Support', 'Status_Support',
+                                'Missing_Conflict_Reason', 'Normalization_Notes',
+                                'Final_Language_Doc', 'Final_Instrument_Full_Name_Original_Language',
+                                'Final_Instrument_Published_Name', 'Final_Enactment_Date',
+                                'Final_Date_of_Entry_in_Force', 'Final_Repeal_Year',
+                                'Final_Current_Status', 'Final_Public', 'Final_Flag',
+                            ];
+                            for (const f of stringFields) {
+                                const val = parsed.evidence[f];
+                                if (Array.isArray(val)) {
+                                    parsed.evidence[f] = val.join('; ');
+                                } else if (val !== undefined && val !== null && typeof val !== 'string') {
+                                    parsed.evidence[f] = String(val);
+                                }
+                            }
                         }
 
+                        // ── INJECT TOOL URLs INTO EVIDENCE ──
+                        // When the provider actually performed web search (toolUrls > 0) but the
+                        // model left evidence URL fields empty (common with Responses API where
+                        // URLs are in annotations, not in the model's JSON), inject them so
+                        // provenance/closed-set checks can pass.
                         if (toolUrls.length > 0 && parsed?.evidence) {
                             const urlsStr = toolUrls.join('; ');
                             if (!(parsed.evidence.URLs_Considered || '').trim()) {
@@ -1857,38 +1910,103 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // ── PORTUGUESE TRANSLATION FALLBACK ──
                         if((ev.Final_Language_Doc||'').toLowerCase()==='portuguese'){const ptO=(ev.Final_Instrument_Full_Name_Original_Language||'').trim(),ptP=(ev.Final_Instrument_Published_Name||'').trim();if(ptO&&(!ptP||ptP===ptO||hasPortugueseMarkers(ptP)||/\bde \d{1,2} de [A-Za-záéíóúãõç]+ de \d{4}\b/i.test(ptP))){try{const tR=buildLLMRequest(providerType,job.model_id,'You translate legal instrument titles to English accurately.',`Translate this title to English. Output ONLY the translated title, no quotes, no commentary:\n${ptO}`,'none',conn.base_url,apiKey);const tResp=await fetchWithRetry(tR.url,tR.init);const tData=await tResp.json();const tText=extractTextContent(providerType,tData,tR.isResponsesApi||false).trim().replace(/^["'\s]+|["'\s]+$/g,'');if(tText&&tText.length>0&&tText!==ptO){ev.Final_Instrument_Published_Name=tText;ev.Missing_Conflict_Reason=[ev.Missing_Conflict_Reason,'Portuguese translation fallback: Published Name translated to English.'].filter(Boolean).join('; ');ev['Missing/Conflict_Reason']=ev.Missing_Conflict_Reason;}}catch(_){}}}
 
-                        const outputJson = { Economy_Code: economyCode, Economy: input.Economy, Language_Doc: ev.Final_Language_Doc || '', Instrument_Full_Name_Original_Language: ev.Final_Instrument_Full_Name_Original_Language || '', Instrument_Published_Name: ev.Final_Instrument_Published_Name || '', Instrument_URL: ev.Final_Instrument_URL || '', Enactment_Date: ev.Final_Enactment_Date || '', Date_of_Entry_in_Force: ev.Final_Date_of_Entry_in_Force || '', Repeal_Year: ev.Final_Repeal_Year || '', Current_Status: ev.Final_Current_Status || '', Public: ev.Final_Public || '', Flag: ev.Final_Flag || '' };
+                        // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
+                        const outputJson = {
+                            Economy_Code: economyCode,
+                            Economy: input.Economy,
+                            Language_Doc: ev.Final_Language_Doc || '',
+                            Instrument_Full_Name_Original_Language: ev.Final_Instrument_Full_Name_Original_Language || '',
+                            Instrument_Published_Name: ev.Final_Instrument_Published_Name || '',
+                            Instrument_URL: ev.Final_Instrument_URL || '',
+                            Enactment_Date: ev.Final_Enactment_Date || '',
+                            Date_of_Entry_in_Force: ev.Final_Date_of_Entry_in_Force || '',
+                            Repeal_Year: ev.Final_Repeal_Year || '',
+                            Current_Status: ev.Final_Current_Status || '',
+                            Public: ev.Final_Public || '',
+                            Flag: ev.Final_Flag || '',
+                        };
+
+                        // Build raw output: include both parsed content and raw API response structure
                         let rawOutput = '=== EXTRACTED CONTENT ===\n' + (content || '') + '\n\n';
-                        if (isResponsesApi && Array.isArray(data?.output)) rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
-                        else if (data?.choices) rawOutput += '=== RAW CHOICES ===\n' + JSON.stringify(data.choices, null, 2).slice(0, 30000);
+                        if (isResponsesApi && Array.isArray(data?.output)) {
+                            rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
+                        } else if (data?.choices) {
+                            rawOutput += '=== RAW CHOICES ===\n' + JSON.stringify(data.choices, null, 2).slice(0, 30000);
+                        }
                         rawOutput += '\n\n=== TOOL URLS EXTRACTED ===\n' + (toolUrls.length ? toolUrls.join('\n') : '(none)');
 
-                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'done', output_json: outputJson, evidence_json: ev, raw_llm_output: rawOutput.slice(0, 50000), input_tokens: inputTokens, output_tokens: outputTokens }));
+                        await base44.entities.JobRow.update(row.id, {
+                            status: 'done',
+                            output_json: outputJson,
+                            evidence_json: ev,
+                            raw_llm_output: rawOutput.slice(0, 50000),
+                            input_tokens: inputTokens,
+                            output_tokens: outputTokens,
+                        });
                         processedCount++;
-                        batchInputTokens += inputTokens || 0;
-                        batchOutputTokens += outputTokens || 0;
 
-                    } catch (rowErr) {
-                        const diagMsg = `[${providerType}/${job.model_id}] ${rowErr.message || 'Unknown error'}`;
-                        try { await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: diagMsg.slice(0, 500), raw_llm_output: (content || '').slice(0, 50000) })); } catch (_) {}
-                        batchErrorCount++;
+                    } catch (error) {
+                        const diagMsg = `[${providerType}/${job.model_id}] ${error.message || 'Unknown error'}`;
+                        try {
+                            await base44.entities.JobRow.update(row.id, {
+                                status: 'error',
+                                error_message: diagMsg.slice(0, 500),
+                                raw_llm_output: (content || '').slice(0, 50000),
+                            });
+                        } catch (_) {}
                     }
                 }
 
-                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
-                const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
-                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
-                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
-                const upd = { processed_rows: newProcessedRows, status: pendingLeft <= 0 ? 'done' : 'running', progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount }, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens };
-                if (totalInputTokens > 0 || totalOutputTokens > 0) upd.estimated_cost_usd = modelInputPrice > 0 ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens) : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, upd));
-                return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
+                // Brief delay before status aggregation to avoid rate limits
+                await new Promise(r => setTimeout(r, 300));
+                const updatedRows = await base44.entities.JobRow.filter({ job_id });
+                const doneCount  = updatedRows.filter((r) => r.status === 'done').length;
+                const errCount   = updatedRows.filter((r) => r.status === 'error').length;
+                const pendingLeft = updatedRows.filter((r) => r.status === 'pending').length;
+                const newStatus  = pendingLeft === 0 ? 'done' : 'running';
+
+                // Aggregate token usage across all done rows
+                const doneRows = updatedRows.filter(r => r.status === 'done');
+                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
+                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+
+                const updatePayload = {
+                    processed_rows: doneCount + errCount,
+                    status: newStatus,
+                    progress_json: {
+                        current_batch: (job.progress_json?.current_batch || 0) + 1,
+                        last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
+                    },
+                    total_input_tokens: totalInputTokens,
+                    total_output_tokens: totalOutputTokens,
+                };
+
+                // Calculate estimated cost every batch
+                if (totalInputTokens > 0 || totalOutputTokens > 0) {
+                    let cost;
+                    if (modelInputPrice > 0) {
+                        cost = estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens);
+                    } else {
+                        cost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                    }
+                    updatePayload.estimated_cost_usd = cost;
+                }
+
+                await base44.entities.Job.update(job_id, updatePayload);
+                await new Promise(r => setTimeout(r, 200));
+                const updatedJobs = await base44.entities.Job.filter({ id: job_id });
+                return Response.json({
+                    job: updatedJobs[0],
+                    processed_this_batch: processedCount,
+                    remaining: pendingLeft,
+                });
 
                 } catch (fatalErr) {
-                    const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
-                    const retryable = isRateLimitError(fatalErr);
-                    try { if (retryable) { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` })); } else { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) })); } } catch (_) {}
-                    return Response.json({ error: fatalMsg, retryable }, { status: retryable ? 429 : 500 });
+                    const fatalMsg = `Fatal processing error: ${fatalErr.message || 'Unknown'}`;
+                    try {
+                        await base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) });
+                    } catch (_) {}
+                    return Response.json({ error: fatalMsg }, { status: 500 });
                 }
             }
 
@@ -1896,13 +2014,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-                const job = jobs[0];
-                const progress = job.progress_json || {};
-                const doneCount = Number(progress.done || 0);
-                const errorCount = Number(progress.error || 0);
-                const processingCount = Number(progress.processing || 0);
-                const pendingCount = typeof progress.pending === 'number' ? progress.pending : Math.max((job.total_rows || 0) - doneCount - errorCount - processingCount, 0);
-                return Response.json({ job, statusCounts: { pending: pendingCount, processing: processingCount, done: doneCount, error: errorCount } });
+
+                const rows = await base44.entities.JobRow.filter({ job_id });
+                const statusCounts = {
+                    pending:    rows.filter((r) => r.status === 'pending').length,
+                    processing: rows.filter((r) => r.status === 'processing').length,
+                    done:       rows.filter((r) => r.status === 'done').length,
+                    error:      rows.filter((r) => r.status === 'error').length,
+                };
+
+                return Response.json({ job: jobs[0], statusCounts });
             }
 
             case 'list': {
@@ -1916,24 +2037,58 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const oldJobs = await base44.entities.Job.filter({ id: job_id });
                 if (!oldJobs.length) return Response.json({ error: 'Original job not found' }, { status: 404 });
                 const oldJob = oldJobs[0];
+
+                // Get spec version
                 let specVersionId = oldJob.spec_version_id;
                 if (use_latest_spec) {
                     const specs = await base44.entities.Spec.filter({ is_active: true });
                     if (specs.length) {
                         const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
-                        if (versions.length) { versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0)); specVersionId = versions[0].id; }
+                        if (versions.length) {
+                            versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
+                            specVersionId = versions[0].id;
+                        }
                     }
                 }
-                const oldRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0, ['row_index', 'input_data']));
-                const newJob = await base44.entities.Job.create({ connection_id: oldJob.connection_id, model_id: oldJob.model_id, web_search_choice: oldJob.web_search_choice || 'none', spec_version_id: specVersionId, status: 'queued', input_file_url: oldJob.input_file_url, input_file_name: oldJob.input_file_name, total_rows: oldJob.total_rows, processed_rows: 0, progress_json: { current_batch: 0, last_row_index: 0, pending: oldJob.total_rows || oldRows.length, processing: 0, done: 0, error: 0 }, connection_name: oldJob.connection_name, model_name: oldJob.model_name, provider_type: oldJob.provider_type || 'openai_compatible' });
-                const rerunPayloads = oldRows.map(r => ({ job_id: newJob.id, row_index: r.row_index, input_data: r.input_data, status: 'pending' }));
-                for (const chunk of chunkArray(rerunPayloads, ENTITY_CREATE_CHUNK_SIZE)) { await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk)); await sleep(200); }
+
+                // Get original rows for input data
+                const oldRows = await base44.entities.JobRow.filter({ job_id });
+                oldRows.sort((a, b) => a.row_index - b.row_index);
+
+                // Create new job
+                const newJob = await base44.entities.Job.create({
+                    connection_id: oldJob.connection_id,
+                    model_id: oldJob.model_id,
+                    web_search_choice: oldJob.web_search_choice || 'none',
+                    spec_version_id: specVersionId,
+                    status: 'queued',
+                    input_file_url: oldJob.input_file_url,
+                    input_file_name: oldJob.input_file_name,
+                    total_rows: oldJob.total_rows,
+                    processed_rows: 0,
+                    progress_json: { current_batch: 0, last_row_index: 0 },
+                    connection_name: oldJob.connection_name,
+                    model_name: oldJob.model_name,
+                    provider_type: oldJob.provider_type || 'openai_compatible',
+                });
+
+                // Create new rows from original input data
+                for (const oldRow of oldRows) {
+                    await base44.entities.JobRow.create({
+                        job_id: newJob.id,
+                        row_index: oldRow.row_index,
+                        input_data: oldRow.input_data,
+                        status: 'pending',
+                    });
+                }
+
                 return Response.json({ job: newJob });
             }
 
             case 'getRows': {
                 const { job_id } = params;
-                const rows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0));
+                const rows = await base44.entities.JobRow.filter({ job_id });
+                rows.sort((a, b) => a.row_index - b.row_index);
                 return Response.json({ rows });
             }
 
@@ -1941,23 +2096,51 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
                 const job = jobs[0];
-                if (job.status !== 'running' && job.status !== 'queued') return Response.json({ error: 'Job is not running' }, { status: 400 });
-                const allRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0));
+                if (job.status !== 'running' && job.status !== 'queued') {
+                    return Response.json({ error: 'Job is not running' }, { status: 400 });
+                }
+
+                const allRows = await base44.entities.JobRow.filter({ job_id });
                 let stopped = 0;
                 for (const row of allRows) {
                     if (row.status === 'pending' || row.status === 'processing') {
-                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Stopped by user' }));
+                        await base44.entities.JobRow.update(row.id, {
+                            status: 'error',
+                            error_message: 'Stopped by user'
+                        });
                         stopped++;
                     }
                 }
+
                 const doneRows = allRows.filter(r => r.status === 'done');
                 const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
                 const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+
+                // Look up stored pricing for stop cost
                 let stopCost;
-                try { const ce = await base44.entities.ModelCatalog.filter({ connection_id: job.connection_id, model_id: job.model_id }); if (ce.length > 0 && ce[0].input_price_per_million > 0) stopCost = estimateCostFromPricing(ce[0].input_price_per_million, ce[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens); } catch (_) {}
-                if (stopCost === undefined) stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', error_message: `Stopped by user. ${stopped} rows skipped.`, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens, estimated_cost_usd: stopCost }));
+                try {
+                    const catalogEntries = await base44.entities.ModelCatalog.filter({
+                        connection_id: job.connection_id,
+                        model_id: job.model_id,
+                    });
+                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
+                        stopCost = estimateCostFromPricing(catalogEntries[0].input_price_per_million, catalogEntries[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens);
+                    }
+                } catch (_) {}
+                if (stopCost === undefined) {
+                    stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                }
+
+                await base44.entities.Job.update(job_id, {
+                    status: 'done',
+                    error_message: `Stopped by user. ${stopped} rows skipped.`,
+                    total_input_tokens: totalInputTokens,
+                    total_output_tokens: totalOutputTokens,
+                    estimated_cost_usd: stopCost,
+                });
+
                 return Response.json({ success: true, stopped });
             }
 
@@ -1965,6 +2148,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id, task_name } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
                 await base44.entities.Job.update(job_id, { task_name: task_name || '' });
                 return Response.json({ success: true });
             }
@@ -1973,8 +2157,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-                const rows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0, ['id']));
-                for (const row of rows) { await withEntityRetry(() => base44.entities.JobRow.delete(row.id)); }
+
+                // Delete all associated rows first
+                const rows = await base44.entities.JobRow.filter({ job_id });
+                for (const row of rows) {
+                    await base44.entities.JobRow.delete(row.id);
+                }
                 await base44.entities.Job.delete(job_id);
                 return Response.json({ success: true });
             }
