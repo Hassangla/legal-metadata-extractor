@@ -713,27 +713,11 @@ function extractEvidenceDerivedUrls(evidence) {
 
 async function verifyCandidateUrls(candidates, maxCheck) {
     const verified = [];
-    const toCheck = candidates.slice(0, maxCheck || 8);
-    for (const url of toCheck) {
-        if (await verifyUrlLoads(url)) {
-            verified.push(url);
-        }
-    }
+    for (const url of candidates.slice(0, maxCheck || 8)) { if (await verifyUrlLoads(url)) verified.push(url); }
     return verified;
 }
-
-function parseUrlList(raw) {
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw.map(u => u.trim()).filter(Boolean);
-    return String(raw).split(/[,;\n]+/).map(u => u.trim()).filter(u => u.startsWith('http'));
-}
-
-function urlInList(url, list) {
-    if (!url || !list) return false;
-    const normalized = url.replace(/\/+$/, '').toLowerCase();
-    const items = parseUrlList(list);
-    return items.some(item => item.replace(/\/+$/, '').toLowerCase() === normalized);
-}
+function parseUrlList(raw) { if (!raw) return []; if (Array.isArray(raw)) return raw.map(u=>u.trim()).filter(Boolean); return String(raw).split(/[,;\n]+/).map(u=>u.trim()).filter(u=>u.startsWith('http')); }
+function urlInList(url, list) { if (!url||!list) return false; const n=url.replace(/\/+$/,'').toLowerCase(); return parseUrlList(list).some(i=>i.replace(/\/+$/,'').toLowerCase()===n); }
 
 const ARTICLE_REFERENCE_REGEXES = [/\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,/\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,/\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi];
 
