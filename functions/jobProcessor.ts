@@ -1860,14 +1860,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     provider_type: oldJob.provider_type || 'openai_compatible',
                 });
 
-                // Create new rows from original input data
-                for (const oldRow of oldRows) {
-                    await base44.entities.JobRow.create({
-                        job_id: newJob.id,
-                        row_index: oldRow.row_index,
-                        input_data: oldRow.input_data,
-                        status: 'pending',
-                    });
+                // Create new rows from original input data using chunked bulkCreate
+                const rerunPayloads = oldRows.map(r => ({ job_id: newJob.id, row_index: r.row_index, input_data: r.input_data, status: 'pending' }));
+                for (const chunk of chunkArray(rerunPayloads, ENTITY_CREATE_CHUNK_SIZE)) {
+                    await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk));
+                    await sleep(200);
                 }
 
                 return Response.json({ job: newJob });
