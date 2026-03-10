@@ -1405,15 +1405,11 @@ Deno.serve(async (req) => {
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
-                const allRows = await base44.entities.JobRow.filter({ job_id });
-                const pendingRows = allRows
-                    .filter((r) => r.status === 'pending')
-                    .sort((a, b) => a.row_index - b.row_index)
-                    .slice(0, effectiveBatchSize);
+                const pendingRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', effectiveBatchSize, 0, ['id', 'row_index', 'input_data', 'status']));
 
                 if (!pendingRows.length) {
-                    await base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows });
-                    return Response.json({ job: { ...job, status: 'done' }, message: 'All rows processed' });
+                    const doneJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows, progress_json: { ...(job.progress_json || {}), pending: 0, processing: 0, done: job.total_rows || 0 } }));
+                    return Response.json({ job: doneJob, message: 'All rows processed' });
                 }
 
                 let processedCount = 0;
