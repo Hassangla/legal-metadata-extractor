@@ -418,10 +418,7 @@ function extractJSON(content) {
 
 function extractUrlsFromText(raw) {
     if (!raw || typeof raw !== 'string') return [];
-    const matches = raw.match(/https?:\/\/[^\s)\]}>"'`]+/gi) || [];
-    return matches
-        .map((u) => u.replace(/[.,;:!?]+$/g, ''))
-        .filter((u) => u.startsWith('http'));
+    return (raw.match(/https?:\/\/[^\s)\]}>"'`]+/gi)||[]).map(u=>u.replace(/[.,;:!?]+$/g,'')).filter(u=>u.startsWith('http'));
 }
 
 function collectUrlsDeep(value, out) {
