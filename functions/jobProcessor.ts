@@ -1957,31 +1957,29 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     }
                 }
 
-                // Brief delay before status aggregation to avoid rate limits
-                await new Promise(r => setTimeout(r, 300));
-                const updatedRows = await base44.entities.JobRow.filter({ job_id });
-                const doneCount  = updatedRows.filter((r) => r.status === 'done').length;
-                const errCount   = updatedRows.filter((r) => r.status === 'error').length;
-                const pendingLeft = updatedRows.filter((r) => r.status === 'pending').length;
-                const newStatus  = pendingLeft === 0 ? 'done' : 'running';
-
-                // Aggregate token usage across all done rows
-                const doneRows = updatedRows.filter(r => r.status === 'done');
-                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
-                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+                // Incremental update — no full row re-fetch
+                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
+                const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
+                const newStatus = pendingLeft <= 0 ? 'done' : 'running';
+                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
+                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
 
                 const updatePayload = {
-                    processed_rows: doneCount + errCount,
+                    processed_rows: newProcessedRows,
                     status: newStatus,
                     progress_json: {
+                        ...(job.progress_json || {}),
                         current_batch: (job.progress_json?.current_batch || 0) + 1,
                         last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
+                        pending: pendingLeft,
+                        processing: 0,
+                        done: (job.progress_json?.done || 0) + processedCount,
+                        error: (job.progress_json?.error || 0) + batchErrorCount,
                     },
                     total_input_tokens: totalInputTokens,
                     total_output_tokens: totalOutputTokens,
                 };
 
-                // Calculate estimated cost every batch
                 if (totalInputTokens > 0 || totalOutputTokens > 0) {
                     let cost;
                     if (modelInputPrice > 0) {
@@ -1992,14 +1990,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     updatePayload.estimated_cost_usd = cost;
                 }
 
-                await base44.entities.Job.update(job_id, updatePayload);
-                await new Promise(r => setTimeout(r, 200));
-                const updatedJobs = await base44.entities.Job.filter({ id: job_id });
-                return Response.json({
-                    job: updatedJobs[0],
-                    processed_this_batch: processedCount,
-                    remaining: pendingLeft,
-                });
+                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
+                return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
 
                 } catch (fatalErr) {
                     const fatalMsg = `Fatal processing error: ${fatalErr.message || 'Unknown'}`;
