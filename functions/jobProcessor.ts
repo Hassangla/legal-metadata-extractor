@@ -1916,8 +1916,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 }
 
                 // Fetch only pending/processing rows to stop (not all rows)
-                const rowsToStop = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }));
-                const processingRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }));
+                const rowsToStop = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)
+                );
+                const processingRows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)
+                );
                 const allToStop = [...rowsToStop, ...processingRows];
                 let stopped = 0;
                 for (const row of allToStop) {
