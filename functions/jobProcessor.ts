@@ -1169,23 +1169,7 @@ function isPortugueseSpeakingEconomy(e){if(!e)return false;const n=e.toLowerCase
 function hasPortugueseMarkers(t){return!!t&&(/\bLei\b/i.test(t)||/\bPortaria\b/i.test(t)||/\bResolu[cç][aã]o\b/i.test(t)||/\bDecreto-?Lei\b/i.test(t)||/[ãõ]/.test(t)||/ção\b/i.test(t));}
 
 // ── ECONOMY ALIASES ─────────────────────────────────────────
-const ECONOMY_ALIASES = {
-    'ivory coast': "Côte d'Ivoire", 'cote divoire': "Côte d'Ivoire", 'cote d ivoire': "Côte d'Ivoire",
-    'south korea': 'Korea, Rep.', 'republic of korea': 'Korea, Rep.', 'north korea': "Korea, Dem. People's Rep.",
-    'democratic republic of the congo': 'Congo, Dem. Rep.', 'drc': 'Congo, Dem. Rep.', 'republic of congo': 'Congo, Rep.',
-    'czech republic': 'Czechia', 'swaziland': 'Eswatini', 'burma': 'Myanmar', 'holland': 'Netherlands',
-    'usa': 'United States', 'united states of america': 'United States', 'uk': 'United Kingdom',
-    'great britain': 'United Kingdom', 'russia': 'Russian Federation', 'iran': 'Iran, Islamic Rep.',
-    'syria': 'Syrian Arab Republic', 'venezuela': 'Venezuela, RB', 'egypt': 'Egypt, Arab Rep.',
-    'yemen': 'Yemen, Rep.', 'laos': 'Lao PDR', 'slovakia': 'Slovak Republic', 'macedonia': 'North Macedonia',
-    'cape verde': 'Cabo Verde', 'east timor': 'Timor-Leste', 'gambia': 'Gambia, The', 'bahamas': 'Bahamas, The',
-    'taiwan': 'Taiwan, China', 'hong kong': 'Hong Kong SAR, China', 'macau': 'Macao SAR, China',
-    'macao': 'Macao SAR, China', 'palestine': 'West Bank and Gaza', 'brunei': 'Brunei Darussalam',
-    'micronesia': 'Micronesia, Fed. Sts.', 'vietnam': 'Viet Nam', 'kyrgyzstan': 'Kyrgyz Republic',
-    'st. lucia': 'St. Lucia', 'saint lucia': 'St. Lucia', 'st. kitts': 'St. Kitts and Nevis',
-    'saint kitts': 'St. Kitts and Nevis', 'st. vincent': 'St. Vincent and the Grenadines',
-    'saint vincent': 'St. Vincent and the Grenadines',
-};
+const ECONOMY_ALIASES = {"ivory coast":"Côte d'Ivoire","cote divoire":"Côte d'Ivoire","cote d ivoire":"Côte d'Ivoire","south korea":"Korea, Rep.","republic of korea":"Korea, Rep.","north korea":"Korea, Dem. People's Rep.","democratic republic of the congo":"Congo, Dem. Rep.","drc":"Congo, Dem. Rep.","republic of congo":"Congo, Rep.","czech republic":"Czechia","swaziland":"Eswatini","burma":"Myanmar","holland":"Netherlands","usa":"United States","united states of america":"United States","uk":"United Kingdom","great britain":"United Kingdom","russia":"Russian Federation","iran":"Iran, Islamic Rep.","syria":"Syrian Arab Republic","venezuela":"Venezuela, RB","egypt":"Egypt, Arab Rep.","yemen":"Yemen, Rep.","laos":"Lao PDR","slovakia":"Slovak Republic","macedonia":"North Macedonia","cape verde":"Cabo Verde","east timor":"Timor-Leste","gambia":"Gambia, The","bahamas":"Bahamas, The","taiwan":"Taiwan, China","hong kong":"Hong Kong SAR, China","macau":"Macao SAR, China","macao":"Macao SAR, China","palestine":"West Bank and Gaza","brunei":"Brunei Darussalam","micronesia":"Micronesia, Fed. Sts.","vietnam":"Viet Nam","kyrgyzstan":"Kyrgyz Republic","st. lucia":"St. Lucia","saint lucia":"St. Lucia","st. kitts":"St. Kitts and Nevis","saint kitts":"St. Kitts and Nevis","st. vincent":"St. Vincent and the Grenadines","saint vincent":"St. Vincent and the Grenadines"};
 
 // ── MODEL PRICING (per million tokens) ──────────────────────
 const MODEL_PRICING = {
