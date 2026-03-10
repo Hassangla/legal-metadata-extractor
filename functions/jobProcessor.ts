@@ -1422,7 +1422,7 @@ Deno.serve(async (req) => {
                 let batchErrorCount = 0;
 
                 for (const row of pendingRows) {
-                    if (processedCount > 0) await interRowDelay();
+                    if (processedCount > 0) await sleep(500);
                     try {
                         await base44.entities.JobRow.update(row.id, { status: 'processing' });
                         const input = row.input_data || {};
