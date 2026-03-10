@@ -1120,34 +1120,28 @@ Deno.serve(async (req) => {
                 const requestedWebSearch = web_search_choice || 'none';
                 const normalizedWebSearch = normalizeWebSearchChoice(resolvedProviderType, requestedWebSearch, model_id);
 
-                const job = await base44.entities.Job.create({
-                    connection_id,
-                    model_id,
+                const initialTotalRows = total_rows || input_rows?.length || 0;
+                const job = await withEntityRetry(() => base44.entities.Job.create({
+                    connection_id, model_id,
                     web_search_choice: normalizedWebSearch,
                     spec_version_id: latestVersion.id,
                     status: 'queued',
-                    input_file_url,
-                    input_file_name,
-                    total_rows: total_rows || 0,
+                    input_file_url, input_file_name,
+                    total_rows: initialTotalRows,
                     processed_rows: 0,
-                    progress_json: { current_batch: 0, last_row_index: 0 },
+                    progress_json: { current_batch: 0, last_row_index: 0, pending: initialTotalRows, processing: 0, done: 0, error: 0 },
                     connection_name: conn?.name || 'Unknown',
                     model_name: model?.display_name || model_id,
                     provider_type: resolvedProviderType || 'openai_compatible',
                     task_name: task_name || '',
-                    total_input_tokens: 0,
-                    total_output_tokens: 0,
-                    estimated_cost_usd: 0,
-                });
+                    total_input_tokens: 0, total_output_tokens: 0, estimated_cost_usd: 0,
+                }));
 
                 if (input_rows?.length) {
-                    for (let i = 0; i < input_rows.length; i++) {
-                        await base44.entities.JobRow.create({
-                            job_id: job.id,
-                            row_index: i + 1,
-                            input_data: input_rows[i],
-                            status: 'pending',
-                        });
+                    const rowPayloads = input_rows.map((row, i) => ({ job_id: job.id, row_index: i + 1, input_data: row, status: 'pending' }));
+                    for (const chunk of chunkArray(rowPayloads, ENTITY_CREATE_CHUNK_SIZE)) {
+                        await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk));
+                        await sleep(200);
                     }
                 }
 
