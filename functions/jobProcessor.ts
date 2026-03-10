@@ -1839,12 +1839,19 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     }
                 }
 
-                // Get original rows for input data
-                const oldRows = await base44.entities.JobRow.filter({ job_id });
-                oldRows.sort((a, b) => a.row_index - b.row_index);
+                // Get original rows for input data — fetch all rows up to 5000, sorted by row_index
+                const oldRows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter(
+                        { job_id },
+                        'row_index',
+                        5000,
+                        0,
+                        ['row_index', 'input_data']
+                    )
+                );
 
                 // Create new job
-                const newJob = await base44.entities.Job.create({
+                const newJob = await withEntityRetry(() => base44.entities.Job.create({
                     connection_id: oldJob.connection_id,
                     model_id: oldJob.model_id,
                     web_search_choice: oldJob.web_search_choice || 'none',
@@ -1854,15 +1861,30 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     input_file_name: oldJob.input_file_name,
                     total_rows: oldJob.total_rows,
                     processed_rows: 0,
-                    progress_json: { current_batch: 0, last_row_index: 0 },
+                    progress_json: {
+                        current_batch: 0,
+                        last_row_index: 0,
+                        pending: oldJob.total_rows || oldRows.length,
+                        processing: 0,
+                        done: 0,
+                        error: 0,
+                    },
                     connection_name: oldJob.connection_name,
                     model_name: oldJob.model_name,
                     provider_type: oldJob.provider_type || 'openai_compatible',
-                });
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    estimated_cost_usd: 0,
+                }));
 
                 // Create new rows from original input data using chunked bulkCreate
-                const rerunPayloads = oldRows.map(r => ({ job_id: newJob.id, row_index: r.row_index, input_data: r.input_data, status: 'pending' }));
-                for (const chunk of chunkArray(rerunPayloads, ENTITY_CREATE_CHUNK_SIZE)) {
+                const rerunRowPayloads = oldRows.map((oldRow) => ({
+                    job_id: newJob.id,
+                    row_index: oldRow.row_index,
+                    input_data: oldRow.input_data,
+                    status: 'pending',
+                }));
+                for (const chunk of chunkArray(rerunRowPayloads, ENTITY_CREATE_CHUNK_SIZE)) {
                     await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk));
                     await sleep(200);
                 }
