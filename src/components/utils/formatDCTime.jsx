@@ -6,7 +6,9 @@
  */
 export function formatDCTime(dateStr, fmt = 'short') {
     if (!dateStr) return '';
-    const date = new Date(dateStr);
+    // Ensure the string is treated as UTC if it has no timezone offset
+    const normalized = String(dateStr).replace(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?)$/, '$1Z');
+    const date = new Date(normalized);
     
     if (fmt === 'short') {
         return date.toLocaleString('en-US', {
