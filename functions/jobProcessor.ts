@@ -1124,26 +1124,11 @@ const MODEL_PRICING = {
     'mistral-large':{input:2.00,output:6.00},'mistral-small':{input:0.10,output:0.30},
 };
 
-function estimateCostFromPricing(inputPricePerMillion, outputPricePerMillion, inputTokens, outputTokens) {
-    return ((inputTokens * inputPricePerMillion) + (outputTokens * outputPricePerMillion)) / 1_000_000;
-}
-
-function estimateCostFromTable(modelId, inputTokens, outputTokens) {
+function estimateCostFromPricing(inp, outp, inTok, outTok) { return ((inTok * inp) + (outTok * outp)) / 1_000_000; }
+function estimateCostFromTable(modelId, inTok, outTok) {
     const id = (modelId || '').toLowerCase();
-
-    if (MODEL_PRICING[id]) {
-        const p = MODEL_PRICING[id];
-        return ((inputTokens * p.input) + (outputTokens * p.output)) / 1_000_000;
-    }
-
-    const sortedEntries = Object.entries(MODEL_PRICING).sort(([a], [b]) => b.length - a.length);
-    for (const [key, p] of sortedEntries) {
-        if (id.startsWith(key) || id.includes(key)) {
-            return ((inputTokens * p.input) + (outputTokens * p.output)) / 1_000_000;
-        }
-    }
-
-    return ((inputTokens * 2) + (outputTokens * 8)) / 1_000_000;
+    const p = MODEL_PRICING[id] || Object.entries(MODEL_PRICING).sort(([a],[b])=>b.length-a.length).find(([k])=>id.startsWith(k)||id.includes(k))?.[1];
+    return p ? ((inTok * p.input) + (outTok * p.output)) / 1_000_000 : ((inTok * 2) + (outTok * 8)) / 1_000_000;
 }
 
 // ── MAIN HANDLER ────────────────────────────────────────────
