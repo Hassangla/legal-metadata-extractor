@@ -1188,7 +1188,7 @@ Deno.serve(async (req) => {
                     return Response.json({ error: msg }, { status: 500 });
                 }
 
-                const specVersions = await base44.entities.SpecVersion.filter({ id: job.spec_version_id });
+                const specVersions = await withEntityRetry(() => base44.entities.SpecVersion.filter({ id: job.spec_version_id }));
                 const specText = specVersions[0]?.spec_text || '';
 
                 const economyMap = {};
