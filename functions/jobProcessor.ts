@@ -132,23 +132,8 @@ function parseKimiToolCallsFromText(text) {
 const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini']);
 const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano']);
 
-function isOpenAIResponsesModel(modelId) {
-    const id = (modelId || '').toLowerCase();
-    if (OPENAI_RESPONSES_MODELS.has(id)) return true;
-    for (const allowed of OPENAI_RESPONSES_MODELS) {
-        if (id.startsWith(allowed + '-')) return true;
-    }
-    return false;
-}
-
-function isOpenAIWebSearchModel(modelId) {
-    const id = (modelId || '').toLowerCase();
-    if (OPENAI_WEBSEARCH_MODELS.has(id)) return true;
-    for (const allowed of OPENAI_WEBSEARCH_MODELS) {
-        if (id.startsWith(allowed + '-')) return true;
-    }
-    return false;
-}
+function isOpenAIResponsesModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_RESPONSES_MODELS.has(id)||[...OPENAI_RESPONSES_MODELS].some(a=>id.startsWith(a+'-')); }
+function isOpenAIWebSearchModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_WEBSEARCH_MODELS.has(id)||[...OPENAI_WEBSEARCH_MODELS].some(a=>id.startsWith(a+'-')); }
 
 // ── ENCRYPTION ──────────────────────────────────────────────
 
