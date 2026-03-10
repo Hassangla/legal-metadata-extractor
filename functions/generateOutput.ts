@@ -48,19 +48,19 @@ Deno.serve(async (req) => {
             const e = row.evidence_json || {};
             const input = row.input_data || {};
             outputAoa.push([
-                '',  // ID — blank, do not edit
-                e.Economy_Code || '',
-                e.Economy || input.Economy || '',
-                e.Final_Language_Doc || '',
-                e.Final_Instrument_Full_Name_Original_Language || '',
-                e.Final_Instrument_Published_Name || '',
-                e.Final_Instrument_URL || '',
-                e.Final_Enactment_Date || '',
-                e.Final_Date_of_Entry_in_Force || '',
-                e.Final_Repeal_Year || '',
-                e.Final_Current_Status || '',
-                e.Final_Public || '',
-                e.Final_Flag || '',
+                '',
+                xlCell(e.Economy_Code),
+                xlCell(e.Economy || input.Economy),
+                xlCell(e.Final_Language_Doc),
+                xlCell(e.Final_Instrument_Full_Name_Original_Language),
+                xlCell(e.Final_Instrument_Published_Name),
+                xlCell(e.Final_Instrument_URL),
+                xlCell(e.Final_Enactment_Date),
+                xlCell(e.Final_Date_of_Entry_in_Force),
+                xlCell(e.Final_Repeal_Year),
+                xlCell(e.Final_Current_Status),
+                xlCell(e.Final_Public),
+                xlCell(e.Final_Flag),
             ]);
         }
 
