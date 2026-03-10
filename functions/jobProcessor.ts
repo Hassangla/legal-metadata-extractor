@@ -1321,14 +1321,8 @@ Deno.serve(async (req) => {
                 });
 
                 if (input_rows?.length) {
-                    for (let i = 0; i < input_rows.length; i++) {
-                        await base44.entities.JobRow.create({
-                            job_id: job.id,
-                            row_index: i + 1,
-                            input_data: input_rows[i],
-                            status: 'pending',
-                        });
-                    }
+                    const rowPayloads = input_rows.map((row, i) => ({ job_id: job.id, row_index: i + 1, input_data: row, status: 'pending' }));
+                    for (const chunk of chunkArray(rowPayloads, ENTITY_CREATE_CHUNK_SIZE)) { await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk)); await sleep(200); }
                 }
 
                 return Response.json({ job });
