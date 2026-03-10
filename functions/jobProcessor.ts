@@ -698,15 +698,9 @@ async function verifyUrlLoads(url) {
 
 function extractEvidenceDerivedUrls(evidence) {
     const urls = [];
-    const fields = ['URLs_Considered', 'Selected_Source_URLs', 'Final_Instrument_URL', 'Instrument_URL_Support'];
-    for (const f of fields) {
+    for (const f of ['URLs_Considered','Selected_Source_URLs','Final_Instrument_URL','Instrument_URL_Support']) {
         const val = evidence[f];
-        if (!val) continue;
-        if (typeof val === 'string') {
-            for (const u of extractUrlsFromText(val)) {
-                if (!urls.includes(u)) urls.push(u);
-            }
-        }
+        if (typeof val === 'string') for (const u of extractUrlsFromText(val)) { if (!urls.includes(u)) urls.push(u); }
     }
     return urls;
 }
