@@ -5,16 +5,16 @@ const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
 
 // ── PROVIDER CHAT CONFIGS ───────────────────────────────────
-
+const _ah = (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' });
 const CHAT_CONFIGS = {
-    openai:           { chatUrl: (b) => `${b}/v1/chat/completions`, responsesUrl: (b) => `${b}/v1/responses`, authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    groq:             { chatUrl: (b) => `${b}/openai/v1/chat/completions`,   authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    together:         { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    mistral:          { chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    perplexity:       { chatUrl: (b) => `${b}/chat/completions`,             authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    openai_compatible:{ chatUrl: (b) => `${b}/v1/chat/completions`,          authHeaders: (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
+    openai:           { chatUrl: (b) => `${b}/v1/chat/completions`, responsesUrl: (b) => `${b}/v1/responses`, authHeaders: _ah, chatFormat: 'openai' },
+    groq:             { chatUrl: (b) => `${b}/openai/v1/chat/completions`, authHeaders: _ah, chatFormat: 'openai' },
+    together:         { chatUrl: (b) => `${b}/v1/chat/completions`, authHeaders: _ah, chatFormat: 'openai' },
+    mistral:          { chatUrl: (b) => `${b}/v1/chat/completions`, authHeaders: _ah, chatFormat: 'openai' },
+    perplexity:       { chatUrl: (b) => `${b}/chat/completions`, authHeaders: _ah, chatFormat: 'openai' },
+    openai_compatible:{ chatUrl: (b) => `${b}/v1/chat/completions`, authHeaders: _ah, chatFormat: 'openai' },
     azure_openai:     { chatUrl: (b, m) => `${b}/openai/deployments/${m}/chat/completions?api-version=2024-10-21`, authHeaders: (k) => ({ 'api-key': k, 'Content-Type': 'application/json' }), chatFormat: 'openai' },
-    anthropic:        { chatUrl: (b) => `${b}/v1/messages`,                  authHeaders: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }), chatFormat: 'anthropic' },
+    anthropic:        { chatUrl: (b) => `${b}/v1/messages`, authHeaders: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }), chatFormat: 'anthropic' },
     google:           { chatUrl: (b, m) => `${b}/v1beta/models/${m}:generateContent`, authHeaders: (_) => ({ 'Content-Type': 'application/json' }), chatFormat: 'google' },
 };
 
