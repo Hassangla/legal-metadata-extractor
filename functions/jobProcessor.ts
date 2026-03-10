@@ -95,12 +95,9 @@ function isLikelyVagueLegalBasis(text) {
 }
 
 function normalizeRowFlag(sourceTierRaw, hasSources) {
-    const t = parseInt(String(sourceTierRaw || '').trim(), 10);
-    if (!hasSources || !Number.isFinite(t)) return 'No sources';
-    if (t <= 2) return '';
-    if (t === 3) return 'Tier 3';
-    if (t === 4) return 'Tier 4';
-    if (t >= 5) return 'Tier 5';
+    const t = parseInt(String(sourceTierRaw||'').trim(),10);
+    if (!hasSources||!Number.isFinite(t)) return 'No sources';
+    if (t<=2) return ''; if (t===3) return 'Tier 3'; if (t===4) return 'Tier 4'; if (t>=5) return 'Tier 5';
     return 'No sources';
 }
 
