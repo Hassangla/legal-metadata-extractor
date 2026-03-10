@@ -137,26 +137,8 @@ function parseKimiToolCallsFromText(text) {
 }
 
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
-// Only these OpenAI models are verified to work with the Responses API.
-// All other models use standard Chat Completions.
-const OPENAI_RESPONSES_MODELS = new Set([
-    'gpt-4.1',
-    'gpt-4.1-mini',
-    'gpt-4.1-nano',
-    'gpt-4o',
-    'gpt-4o-mini',
-]);
-
-// Only these OpenAI models are verified to support web_search via Responses API.
-// This is a strict subset of OPENAI_RESPONSES_MODELS.
-const OPENAI_WEBSEARCH_MODELS = new Set([
-    'gpt-4o',
-    'gpt-4o-mini',
-    'gpt-4o-search-preview',
-    'gpt-4.1',
-    'gpt-4.1-mini',
-    'gpt-4.1-nano',
-]);
+const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini']);
+const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano']);
 
 function isOpenAIResponsesModel(modelId) {
     const id = (modelId || '').toLowerCase();
