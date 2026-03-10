@@ -1240,7 +1240,7 @@ Deno.serve(async (req) => {
                 for (const row of pendingRows) {
                     if (processedCount > 0) await interRowDelay();
                     try {
-                        await base44.entities.JobRow.update(row.id, { status: 'processing' });
+                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
                         const rawEconomy = (input.Economy || '').toLowerCase().trim();
                         const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
