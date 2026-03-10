@@ -788,11 +788,7 @@ function urlInList(url, list) {
     return items.some(item => item.replace(/\/+$/, '').toLowerCase() === normalized);
 }
 
-const ARTICLE_REFERENCE_REGEXES = [
-    /\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,
-    /\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,
-    /\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi,
-];
+const ARTICLE_REFERENCE_REGEXES = [/\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,/\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,/\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi];
 
 const LEGAL_TERM_TRANSLATIONS = {'aviso':'Notice','decreto':'Decree','lei':'Law','código':'Code','regulamento':'Regulation','portaria':'Ordinance','resolução':'Resolution','gesetz':'Law','verordnung':'Regulation','erlass':'Decree','qanun':'Law','nizam':'Regulation','qarar':'Decision','legge':'Law','regolamento':'Regulation','decreto-legge':'Decree-Law','ustawa':'Law','rozporządzenie':'Regulation','закон':'Law','указ':'Decree','постановление':'Resolution'};
 
