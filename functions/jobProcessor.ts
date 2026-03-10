@@ -1923,15 +1923,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
                         rawOutput += '\n\n=== TOOL URLS EXTRACTED ===\n' + (toolUrls.length ? toolUrls.join('\n') : '(none)');
 
-                        await base44.entities.JobRow.update(row.id, {
-                            status: 'done',
-                            output_json: outputJson,
-                            evidence_json: ev,
-                            raw_llm_output: rawOutput.slice(0, 50000),
-                            input_tokens: inputTokens,
-                            output_tokens: outputTokens,
-                        });
+                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'done', output_json: outputJson, evidence_json: ev, raw_llm_output: rawOutput.slice(0, 50000), input_tokens: inputTokens, output_tokens: outputTokens }));
                         processedCount++;
+                        batchInputTokens += inputTokens || 0;
+                        batchOutputTokens += outputTokens || 0;
 
                     } catch (rowErr) {
                         const diagMsg = `[${providerType}/${job.model_id}] ${rowErr.message || 'Unknown error'}`;
