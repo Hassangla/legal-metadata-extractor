@@ -1960,9 +1960,17 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 // Delete all associated rows first
-                const rows = await base44.entities.JobRow.filter({ job_id });
+                const rows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter(
+                        { job_id },
+                        'row_index',
+                        5000,
+                        0,
+                        ['id']
+                    )
+                );
                 for (const row of rows) {
-                    await base44.entities.JobRow.delete(row.id);
+                    await withEntityRetry(() => base44.entities.JobRow.delete(row.id));
                 }
                 await base44.entities.Job.delete(job_id);
                 return Response.json({ success: true });
