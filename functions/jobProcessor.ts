@@ -1630,26 +1630,13 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let content = extractTextContent(providerType, data, isResponsesApi);
 
-                        // Diagnostic: log what we got from the LLM
-                        console.log(`[DIAG] row=${row.row_index} provider=${providerType} isResponsesApi=${isResponsesApi} contentLen=${(content||'').length} contentPreview=${(content||'').slice(0,200)}`);
-
-                        // ── RUNTIME PROVENANCE: extract tool URLs and detect silent failures ──
                         const toolUrls = extractToolUrlsFromResponse(providerType, data, isResponsesApi);
-                        if (isKimiSearch && kimiObservedToolUrls.length > 0) {
-                            for (const u of kimiObservedToolUrls) {
-                                if (!toolUrls.includes(u)) toolUrls.push(u);
-                            }
-                        }
-                        // Diagnostic: log tool URLs found
-                        console.log(`[DIAG] row=${row.row_index} toolUrls=${toolUrls.length}: ${toolUrls.slice(0,5).join(', ')}`);
-
+                        if (isKimiSearch && kimiObservedToolUrls.length > 0) { for (const u of kimiObservedToolUrls) { if (!toolUrls.includes(u)) toolUrls.push(u); } }
                         const toolError = isNoSearchToolError(providerType, data, content, isResponsesApi);
                         const searchWasRequested = requestedWebSearch !== 'none';
                         const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
-
-                        console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
 
                         // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
                         // do one retry with an explicit instruction to call $web_search ──
