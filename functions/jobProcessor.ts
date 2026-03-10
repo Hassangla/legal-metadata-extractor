@@ -1,8 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
-const BATCH_SIZE = 3;
-const MAX_RETRIES = 3;
-const RETRY_BASE_MS = 2000;
+const BATCH_SIZE=3,MAX_RETRIES=3,RETRY_BASE_MS=2000,ENTITY_RETRY_ATTEMPTS=5,ENTITY_RETRY_BASE_MS=500,ENTITY_CREATE_CHUNK_SIZE=50;
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const isRateLimitError=(err)=>/rate.?limit|429|too many requests/i.test(String(err?.message||err||''));
+async function withEntityRetry(fn,attempts=ENTITY_RETRY_ATTEMPTS){let e;for(let a=0;a<=attempts;a++){try{return await fn();}catch(err){e=err;if(!isRateLimitError(err)||a===attempts)throw err;await sleep(ENTITY_RETRY_BASE_MS*Math.pow(2,a)+Math.floor(Math.random()*250));}}throw e;}
+function chunkArray(items,size){const c=[];for(let i=0;i<items.length;i+=size)c.push(items.slice(i,i+size));return c;}
 
 // ── PROVIDER CHAT CONFIGS ───────────────────────────────────
 const _ah = (k) => ({ 'Authorization': `Bearer ${k}`, 'Content-Type': 'application/json' });
