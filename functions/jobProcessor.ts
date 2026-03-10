@@ -868,13 +868,7 @@ function normalizeLanguageDoc(rawLanguage) {
         return 'Pashto / Dari';
     }
 
-    const map = {
-        arabic:'Arabic',
-        french:'French','français':'French',francais:'French',fr:'French','fr-fr':'French',
-        spanish:'Spanish','español':'Spanish',espanol:'Spanish',es:'Spanish','es-es':'Spanish','es-419':'Spanish','spanish (latin america)':'Spanish',
-        portuguese:'Portuguese','português':'Portuguese',portugues:'Portuguese',pt:'Portuguese','pt-br':'Portuguese',pt_br:'Portuguese','pt-pt':'Portuguese','portuguese (brazil)':'Portuguese',
-        pashto:'Pashto',dari:'Dari',
-    };
+    const map = {arabic:'Arabic',french:'French','français':'French',francais:'French',fr:'French','fr-fr':'French',spanish:'Spanish','español':'Spanish',espanol:'Spanish',es:'Spanish','es-es':'Spanish','es-419':'Spanish','spanish (latin america)':'Spanish',portuguese:'Portuguese','português':'Portuguese',portugues:'Portuguese',pt:'Portuguese','pt-br':'Portuguese',pt_br:'Portuguese','pt-pt':'Portuguese','portuguese (brazil)':'Portuguese',pashto:'Pashto',dari:'Dari'};
     if (map[coreLang]) return map[coreLang];
     return coreLang.split(/\s+/).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
 }
