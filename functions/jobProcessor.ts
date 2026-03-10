@@ -1777,11 +1777,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        // ── INJECT TOOL URLs INTO EVIDENCE ──
-                        // When the provider actually performed web search (toolUrls > 0) but the
-                        // model left evidence URL fields empty (common with Responses API where
-                        // URLs are in annotations, not in the model's JSON), inject them so
-                        // provenance/closed-set checks can pass.
                         if (toolUrls.length > 0 && parsed?.evidence) {
                             const urlsStr = toolUrls.join('; ');
                             if (!(parsed.evidence.URLs_Considered || '').trim()) {
