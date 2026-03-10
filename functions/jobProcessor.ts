@@ -18,16 +18,8 @@ const CHAT_CONFIGS = {
     google:           { chatUrl: (b, m) => `${b}/v1beta/models/${m}:generateContent`, authHeaders: (_) => ({ 'Content-Type': 'application/json' }), chatFormat: 'google' },
 };
 
-// Providers whose web search is handled server-side (single API call returns search results).
-// Only these providers can actually perform web search — all others would need
-// client-side search execution, which we do not support.
-const SERVER_SIDE_SEARCH = new Set([
-    'web_search',          // Anthropic — server-side tool
-    'web_search_preview',  // OpenAI — server-side tool (via Responses API)
-    'google_search',       // Google Gemini — server-side tool
-    'builtin',             // Perplexity — all models search automatically
-    'kimi_web_search',     // Kimi/Moonshot — server-side builtin_function (echo-loop protocol)
-]);
+// Providers whose web search is handled server-side
+const SERVER_SIDE_SEARCH = new Set(['web_search','web_search_preview','google_search','builtin','kimi_web_search']);
 
 function isWebSearchChoiceCompatible(providerType, webSearchChoice, modelId) {
     if (!webSearchChoice || webSearchChoice === 'none') return true;
