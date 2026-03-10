@@ -420,7 +420,6 @@ async function fetchWithRetry(url, init, retries) {
 }
 
 // ── JSON EXTRACTION ─────────────────────────────────────────
-
 function extractJSON(content) {
     try { return JSON.parse(content.trim()); } catch (_) {}
     const fenceMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
