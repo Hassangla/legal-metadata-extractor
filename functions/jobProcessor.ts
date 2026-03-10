@@ -3,6 +3,47 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 const BATCH_SIZE = 3;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
+const ENTITY_RETRY_ATTEMPTS = 5;
+const ENTITY_RETRY_BASE_MS = 500;
+const ENTITY_CREATE_CHUNK_SIZE = 50;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+function isRateLimitError(err) { return /rate.?limit|429|too many requests/i.test(String(err?.message || err || '')); }
+async function withEntityRetry(fn, attempts = ENTITY_RETRY_ATTEMPTS) {
+    let lastErr;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
+        try { return await fn(); } catch (err) { lastErr = err; if (!isRateLimitError(err) || attempt === attempts) throw err; await sleep(ENTITY_RETRY_BASE_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 250)); }
+    }
+    throw lastErr;
+}
+function chunkArray(items, size) { const chunks = []; for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size)); return chunks; }
+
+async function runKimiSearchLoop(url, init, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls, _providerType) {
+    let data;
+    const messages = JSON.parse(init.body).messages || [];
+    for (let round = 0; round < 6; round++) {
+        const body = JSON.parse(init.body);
+        body.messages = messages;
+        const resp = await fetchWithRetry(url, { method: 'POST', headers: init.headers, body: JSON.stringify(body) });
+        data = await resp.json();
+        if (data.usage) { inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0; outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0; }
+        const msg = data.choices?.[0]?.message;
+        if (!msg) break;
+        const embeddedCalls = parseKimiToolCallsFromText(msg.content || '');
+        const toolCalls = (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ? msg.tool_calls : embeddedCalls;
+        if (toolCalls.length > 0) {
+            kimiObservedToolCalls = true;
+            messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls || [] });
+            for (const tc of toolCalls) {
+                let args; try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
+                messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function?.name || '$web_search', content: JSON.stringify({ query: args.query || args.keywords || '', results: [] }) });
+                for (const u of extractUrlsFromText(tc.function?.arguments || '')) { if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u); }
+            }
+            continue;
+        }
+        break;
+    }
+    return { data, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls };
+}
 
 // ── PROVIDER CHAT CONFIGS ───────────────────────────────────
 
