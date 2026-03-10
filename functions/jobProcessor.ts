@@ -1203,10 +1203,10 @@ Deno.serve(async (req) => {
                 let modelInputPrice = 0;
                 let modelOutputPrice = 0;
                 try {
-                    const catalogEntries = await base44.entities.ModelCatalog.filter({
+                    const catalogEntries = await withEntityRetry(() => base44.entities.ModelCatalog.filter({
                         connection_id: job.connection_id,
                         model_id: job.model_id,
-                    });
+                    }));
                     if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
                         modelInputPrice = catalogEntries[0].input_price_per_million;
                         modelOutputPrice = catalogEntries[0].output_price_per_million || 0;
