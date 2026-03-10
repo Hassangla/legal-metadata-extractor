@@ -1638,46 +1638,17 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
                         let searchActuallyWorked = hasRealWebSearch;
 
-                        // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
-                        // do one retry with an explicit instruction to call $web_search ──
-                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
-                            && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
+                        if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search' && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
                             try {
                                 const retryBodyObj = JSON.parse(init.body);
-                                // Remove previous conversation; send a fresh short prompt
-                                retryBodyObj.messages = [
-                                    { role: 'system', content: 'You MUST use the $web_search tool. Call it now.' },
-                                    { role: 'user', content: `Search the web using $web_search for: ${query1}` },
-                                ];
+                                retryBodyObj.messages = [{ role: 'system', content: 'You MUST use the $web_search tool. Call it now.' }, { role: 'user', content: `Search the web using $web_search for: ${query1}` }];
                                 retryBodyObj.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
                                 retryBodyObj.tool_choice = { type: 'builtin_function', function: { name: '$web_search' } };
-                                delete retryBodyObj.thinking;
-                                retryBodyObj.max_tokens = 256;
-                                retryBodyObj.temperature = 1;
-                                const retryResp = await fetchWithRetry(url, {
-                                    method: 'POST',
-                                    headers: init.headers,
-                                    body: JSON.stringify(retryBodyObj),
-                                });
-                                const retryData = await retryResp.json();
-                                const retryToolUrls = extractToolUrlsFromResponse(providerType, retryData, false);
-                                if (retryToolUrls.length > 0) {
-                                    // Merge retry tool URLs into the main set
-                                    for (const u of retryToolUrls) {
-                                        if (!toolUrls.includes(u)) toolUrls.push(u);
-                                    }
-                                }
-                            } catch (_) { /* non-fatal retry */ }
+                                delete retryBodyObj.thinking; retryBodyObj.max_tokens = 256; retryBodyObj.temperature = 1;
+                                const retryData = await (await fetchWithRetry(url, { method: 'POST', headers: init.headers, body: JSON.stringify(retryBodyObj) })).json();
+                                for (const u of extractToolUrlsFromResponse(providerType, retryData, false)) { if (!toolUrls.includes(u)) toolUrls.push(u); }
+                            } catch (_) {}
                         }
-
-                        // Downgrade search availability if tool silently failed or returned no URLs.
-                        // Kimi can execute $web_search without exposing URL citations in every response,
-                        // so treat observed server-side tool calls as valid search execution.
-                        // For Kimi: if we observed tool calls during the echo loop, trust that search worked
-                        // even if the final response doesn't have tool_calls in it.
-                        //
-                        // ALSO: for Responses API, check if the model's text content mentions URLs
-                        // even if extractToolUrlsFromResponse didn't find structured ones.
                         if (searchActuallyWorked && toolUrls.length === 0 && content) {
                             const contentUrls = extractUrlsFromText(content);
                             for (const u of contentUrls) {
