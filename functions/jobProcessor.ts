@@ -1585,11 +1585,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         let inputTokens = 0;
                         let outputTokens = 0;
 
-                        // Kimi uses an echo-based tool-call loop: the client echoes
-                        // $web_search arguments back, and Moonshot's server performs
-                        // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
-
                         let kimiObservedToolUrls = [];
                         let kimiObservedToolCalls = false;
 
@@ -1597,7 +1593,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                           ({ data, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls } = await runKimiSearchLoop(url, init, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls, providerType));
                         } else {
                           try {
-                            // Single-call path: Anthropic, Google, Perplexity, OpenAI Responses API, and no-search
                             const resp = await fetchWithRetry(url, init);
                             data = await resp.json();
 
