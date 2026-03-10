@@ -1816,29 +1816,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // ── PORTUGUESE TRANSLATION FALLBACK ──
                         if((ev.Final_Language_Doc||'').toLowerCase()==='portuguese'){const ptO=(ev.Final_Instrument_Full_Name_Original_Language||'').trim(),ptP=(ev.Final_Instrument_Published_Name||'').trim();if(ptO&&(!ptP||ptP===ptO||hasPortugueseMarkers(ptP)||/\bde \d{1,2} de [A-Za-záéíóúãõç]+ de \d{4}\b/i.test(ptP))){try{const tR=buildLLMRequest(providerType,job.model_id,'You translate legal instrument titles to English accurately.',`Translate this title to English. Output ONLY the translated title, no quotes, no commentary:\n${ptO}`,'none',conn.base_url,apiKey);const tResp=await fetchWithRetry(tR.url,tR.init);const tData=await tResp.json();const tText=extractTextContent(providerType,tData,tR.isResponsesApi||false).trim().replace(/^["'\s]+|["'\s]+$/g,'');if(tText&&tText.length>0&&tText!==ptO){ev.Final_Instrument_Published_Name=tText;ev.Missing_Conflict_Reason=[ev.Missing_Conflict_Reason,'Portuguese translation fallback: Published Name translated to English.'].filter(Boolean).join('; ');ev['Missing/Conflict_Reason']=ev.Missing_Conflict_Reason;}}catch(_){}}}
 
-                        // ── BUILD output_json FROM evidence.Final_* (mirror rule) ──
-                        const outputJson = {
-                            Economy_Code: economyCode,
-                            Economy: input.Economy,
-                            Language_Doc: ev.Final_Language_Doc || '',
-                            Instrument_Full_Name_Original_Language: ev.Final_Instrument_Full_Name_Original_Language || '',
-                            Instrument_Published_Name: ev.Final_Instrument_Published_Name || '',
-                            Instrument_URL: ev.Final_Instrument_URL || '',
-                            Enactment_Date: ev.Final_Enactment_Date || '',
-                            Date_of_Entry_in_Force: ev.Final_Date_of_Entry_in_Force || '',
-                            Repeal_Year: ev.Final_Repeal_Year || '',
-                            Current_Status: ev.Final_Current_Status || '',
-                            Public: ev.Final_Public || '',
-                            Flag: ev.Final_Flag || '',
-                        };
-
-                        // Build raw output: include both parsed content and raw API response structure
+                        const outputJson = { Economy_Code: economyCode, Economy: input.Economy, Language_Doc: ev.Final_Language_Doc || '', Instrument_Full_Name_Original_Language: ev.Final_Instrument_Full_Name_Original_Language || '', Instrument_Published_Name: ev.Final_Instrument_Published_Name || '', Instrument_URL: ev.Final_Instrument_URL || '', Enactment_Date: ev.Final_Enactment_Date || '', Date_of_Entry_in_Force: ev.Final_Date_of_Entry_in_Force || '', Repeal_Year: ev.Final_Repeal_Year || '', Current_Status: ev.Final_Current_Status || '', Public: ev.Final_Public || '', Flag: ev.Final_Flag || '' };
                         let rawOutput = '=== EXTRACTED CONTENT ===\n' + (content || '') + '\n\n';
-                        if (isResponsesApi && Array.isArray(data?.output)) {
-                            rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
-                        } else if (data?.choices) {
-                            rawOutput += '=== RAW CHOICES ===\n' + JSON.stringify(data.choices, null, 2).slice(0, 30000);
-                        }
+                        if (isResponsesApi && Array.isArray(data?.output)) rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
+                        else if (data?.choices) rawOutput += '=== RAW CHOICES ===\n' + JSON.stringify(data.choices, null, 2).slice(0, 30000);
                         rawOutput += '\n\n=== TOOL URLS EXTRACTED ===\n' + (toolUrls.length ? toolUrls.join('\n') : '(none)');
 
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'done', output_json: outputJson, evidence_json: ev, raw_llm_output: rawOutput.slice(0, 50000), input_tokens: inputTokens, output_tokens: outputTokens }));
