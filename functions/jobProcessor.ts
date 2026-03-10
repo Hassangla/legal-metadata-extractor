@@ -1943,60 +1943,27 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         });
                         processedCount++;
 
-                    } catch (error) {
-                        const diagMsg = `[${providerType}/${job.model_id}] ${error.message || 'Unknown error'}`;
-                        try {
-                            await base44.entities.JobRow.update(row.id, {
-                                status: 'error',
-                                error_message: diagMsg.slice(0, 500),
-                                raw_llm_output: (content || '').slice(0, 50000),
-                            });
-                        } catch (_) {}
+                    } catch (rowErr) {
+                        const diagMsg = `[${providerType}/${job.model_id}] ${rowErr.message || 'Unknown error'}`;
+                        try { await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: diagMsg.slice(0, 500), raw_llm_output: (content || '').slice(0, 50000) })); } catch (_) {}
+                        batchErrorCount++;
                     }
                 }
 
-                // Incremental update — no full row re-fetch
                 const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
                 const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
-                const newStatus = pendingLeft <= 0 ? 'done' : 'running';
                 const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
                 const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
-
-                const updatePayload = {
-                    processed_rows: newProcessedRows,
-                    status: newStatus,
-                    progress_json: {
-                        ...(job.progress_json || {}),
-                        current_batch: (job.progress_json?.current_batch || 0) + 1,
-                        last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
-                        pending: pendingLeft,
-                        processing: 0,
-                        done: (job.progress_json?.done || 0) + processedCount,
-                        error: (job.progress_json?.error || 0) + batchErrorCount,
-                    },
-                    total_input_tokens: totalInputTokens,
-                    total_output_tokens: totalOutputTokens,
-                };
-
-                if (totalInputTokens > 0 || totalOutputTokens > 0) {
-                    let cost;
-                    if (modelInputPrice > 0) {
-                        cost = estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens);
-                    } else {
-                        cost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                    }
-                    updatePayload.estimated_cost_usd = cost;
-                }
-
-                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
+                const upd = { processed_rows: newProcessedRows, status: pendingLeft <= 0 ? 'done' : 'running', progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount }, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens };
+                if (totalInputTokens > 0 || totalOutputTokens > 0) upd.estimated_cost_usd = modelInputPrice > 0 ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens) : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, upd));
                 return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
 
                 } catch (fatalErr) {
-                    const fatalMsg = `Fatal processing error: ${fatalErr.message || 'Unknown'}`;
-                    try {
-                        await base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) });
-                    } catch (_) {}
-                    return Response.json({ error: fatalMsg }, { status: 500 });
+                    const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
+                    const retryable = isRateLimitError(fatalErr);
+                    try { if (retryable) { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` })); } else { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) })); } } catch (_) {}
+                    return Response.json({ error: fatalMsg, retryable }, { status: retryable ? 429 : 500 });
                 }
             }
 
@@ -2004,16 +1971,13 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
-                const rows = await base44.entities.JobRow.filter({ job_id });
-                const statusCounts = {
-                    pending:    rows.filter((r) => r.status === 'pending').length,
-                    processing: rows.filter((r) => r.status === 'processing').length,
-                    done:       rows.filter((r) => r.status === 'done').length,
-                    error:      rows.filter((r) => r.status === 'error').length,
-                };
-
-                return Response.json({ job: jobs[0], statusCounts });
+                const job = jobs[0];
+                const progress = job.progress_json || {};
+                const doneCount = Number(progress.done || 0);
+                const errorCount = Number(progress.error || 0);
+                const processingCount = Number(progress.processing || 0);
+                const pendingCount = typeof progress.pending === 'number' ? progress.pending : Math.max((job.total_rows || 0) - doneCount - errorCount - processingCount, 0);
+                return Response.json({ job, statusCounts: { pending: pendingCount, processing: processingCount, done: doneCount, error: errorCount } });
             }
 
             case 'list': {
@@ -2027,58 +1991,24 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const oldJobs = await base44.entities.Job.filter({ id: job_id });
                 if (!oldJobs.length) return Response.json({ error: 'Original job not found' }, { status: 404 });
                 const oldJob = oldJobs[0];
-
-                // Get spec version
                 let specVersionId = oldJob.spec_version_id;
                 if (use_latest_spec) {
                     const specs = await base44.entities.Spec.filter({ is_active: true });
                     if (specs.length) {
                         const versions = await base44.entities.SpecVersion.filter({ spec_id: specs[0].id });
-                        if (versions.length) {
-                            versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0));
-                            specVersionId = versions[0].id;
-                        }
+                        if (versions.length) { versions.sort((a, b) => (b.version_number || 0) - (a.version_number || 0)); specVersionId = versions[0].id; }
                     }
                 }
-
-                // Get original rows for input data
-                const oldRows = await base44.entities.JobRow.filter({ job_id });
-                oldRows.sort((a, b) => a.row_index - b.row_index);
-
-                // Create new job
-                const newJob = await base44.entities.Job.create({
-                    connection_id: oldJob.connection_id,
-                    model_id: oldJob.model_id,
-                    web_search_choice: oldJob.web_search_choice || 'none',
-                    spec_version_id: specVersionId,
-                    status: 'queued',
-                    input_file_url: oldJob.input_file_url,
-                    input_file_name: oldJob.input_file_name,
-                    total_rows: oldJob.total_rows,
-                    processed_rows: 0,
-                    progress_json: { current_batch: 0, last_row_index: 0 },
-                    connection_name: oldJob.connection_name,
-                    model_name: oldJob.model_name,
-                    provider_type: oldJob.provider_type || 'openai_compatible',
-                });
-
-                // Create new rows from original input data
-                for (const oldRow of oldRows) {
-                    await base44.entities.JobRow.create({
-                        job_id: newJob.id,
-                        row_index: oldRow.row_index,
-                        input_data: oldRow.input_data,
-                        status: 'pending',
-                    });
-                }
-
+                const oldRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0, ['row_index', 'input_data']));
+                const newJob = await base44.entities.Job.create({ connection_id: oldJob.connection_id, model_id: oldJob.model_id, web_search_choice: oldJob.web_search_choice || 'none', spec_version_id: specVersionId, status: 'queued', input_file_url: oldJob.input_file_url, input_file_name: oldJob.input_file_name, total_rows: oldJob.total_rows, processed_rows: 0, progress_json: { current_batch: 0, last_row_index: 0, pending: oldJob.total_rows || oldRows.length, processing: 0, done: 0, error: 0 }, connection_name: oldJob.connection_name, model_name: oldJob.model_name, provider_type: oldJob.provider_type || 'openai_compatible' });
+                const rerunPayloads = oldRows.map(r => ({ job_id: newJob.id, row_index: r.row_index, input_data: r.input_data, status: 'pending' }));
+                for (const chunk of chunkArray(rerunPayloads, ENTITY_CREATE_CHUNK_SIZE)) { await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk)); await sleep(200); }
                 return Response.json({ job: newJob });
             }
 
             case 'getRows': {
                 const { job_id } = params;
-                const rows = await base44.entities.JobRow.filter({ job_id });
-                rows.sort((a, b) => a.row_index - b.row_index);
+                const rows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0));
                 return Response.json({ rows });
             }
 
@@ -2086,51 +2016,23 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
                 const job = jobs[0];
-                if (job.status !== 'running' && job.status !== 'queued') {
-                    return Response.json({ error: 'Job is not running' }, { status: 400 });
-                }
-
-                const allRows = await base44.entities.JobRow.filter({ job_id });
+                if (job.status !== 'running' && job.status !== 'queued') return Response.json({ error: 'Job is not running' }, { status: 400 });
+                const allRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0));
                 let stopped = 0;
                 for (const row of allRows) {
                     if (row.status === 'pending' || row.status === 'processing') {
-                        await base44.entities.JobRow.update(row.id, {
-                            status: 'error',
-                            error_message: 'Stopped by user'
-                        });
+                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Stopped by user' }));
                         stopped++;
                     }
                 }
-
                 const doneRows = allRows.filter(r => r.status === 'done');
                 const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
                 const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
-
-                // Look up stored pricing for stop cost
                 let stopCost;
-                try {
-                    const catalogEntries = await base44.entities.ModelCatalog.filter({
-                        connection_id: job.connection_id,
-                        model_id: job.model_id,
-                    });
-                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
-                        stopCost = estimateCostFromPricing(catalogEntries[0].input_price_per_million, catalogEntries[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens);
-                    }
-                } catch (_) {}
-                if (stopCost === undefined) {
-                    stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                }
-
-                await base44.entities.Job.update(job_id, {
-                    status: 'done',
-                    error_message: `Stopped by user. ${stopped} rows skipped.`,
-                    total_input_tokens: totalInputTokens,
-                    total_output_tokens: totalOutputTokens,
-                    estimated_cost_usd: stopCost,
-                });
-
+                try { const ce = await base44.entities.ModelCatalog.filter({ connection_id: job.connection_id, model_id: job.model_id }); if (ce.length > 0 && ce[0].input_price_per_million > 0) stopCost = estimateCostFromPricing(ce[0].input_price_per_million, ce[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens); } catch (_) {}
+                if (stopCost === undefined) stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', error_message: `Stopped by user. ${stopped} rows skipped.`, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens, estimated_cost_usd: stopCost }));
                 return Response.json({ success: true, stopped });
             }
 
@@ -2138,7 +2040,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id, task_name } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
                 await base44.entities.Job.update(job_id, { task_name: task_name || '' });
                 return Response.json({ success: true });
             }
@@ -2147,12 +2048,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const { job_id } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
-                // Delete all associated rows first
-                const rows = await base44.entities.JobRow.filter({ job_id });
-                for (const row of rows) {
-                    await base44.entities.JobRow.delete(row.id);
-                }
+                const rows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0, ['id']));
+                for (const row of rows) { await withEntityRetry(() => base44.entities.JobRow.delete(row.id)); }
                 await base44.entities.Job.delete(job_id);
                 return Response.json({ success: true });
             }
