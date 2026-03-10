@@ -82,16 +82,10 @@ function detectProviderTypeFromUrl(baseUrl) {
 }
 
 function isLikelyVagueLegalBasis(text) {
-    const v = String(text || '').trim().toLowerCase();
-    if (!v) return true;
-    if (v.length < 12) return true;
-    const vagueMarkers = [
-        'law', 'act', 'code', 'decree', 'regulation', 'ordinance', 'legislation',
-        'legal basis', 'relevant law', 'applicable law', 'n/a', 'na', 'unknown',
-    ];
-    const hasMarker = vagueMarkers.some(m => v === m || v.includes(m));
-    const hasNumber = /\b(no\.?\s*\d+|\d{2,4}[\/\-]\d{1,3}|\d{3,})\b/i.test(v);
-    return hasMarker && !hasNumber;
+    const v = String(text||'').trim().toLowerCase();
+    if (!v||v.length<12) return true;
+    const hasMarker = ['law','act','code','decree','regulation','ordinance','legislation','legal basis','relevant law','applicable law','n/a','na','unknown'].some(m=>v===m||v.includes(m));
+    return hasMarker && !/\b(no\.?\s*\d+|\d{2,4}[\/\-]\d{1,3}|\d{3,})\b/i.test(v);
 }
 
 function normalizeRowFlag(sourceTierRaw, hasSources) {
