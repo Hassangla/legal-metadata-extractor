@@ -796,12 +796,7 @@ const ARTICLE_REFERENCE_REGEXES = [
 
 const LEGAL_TERM_TRANSLATIONS = {'aviso':'Notice','decreto':'Decree','lei':'Law','código':'Code','regulamento':'Regulation','portaria':'Ordinance','resolução':'Resolution','gesetz':'Law','verordnung':'Regulation','erlass':'Decree','qanun':'Law','nizam':'Regulation','qarar':'Decision','legge':'Law','regolamento':'Regulation','decreto-legge':'Decree-Law','ustawa':'Law','rozporządzenie':'Regulation','закон':'Law','указ':'Decree','постановление':'Resolution'};
 
-const INLINE_DATE_REGEXES = [
-    /,?\s*(?:dated\s+)?\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/gi,
-    /,?\s*(?:de\s+)?\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+(?:\s+de\s+\d{4})?/gi,
-    /,?\s*(?:du\s+)?\d{1,2}\s+[A-Za-zÀ-ÿ]+\s+\d{4}/gi,
-    /,?\s*(?:of\s+)?\d{1,2}\s+[A-Za-z]+\s+\d{4}/gi,
-];
+const INLINE_DATE_REGEXES = [/,?\s*(?:dated\s+)?\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/gi,/,?\s*(?:de\s+)?\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+(?:\s+de\s+\d{4})?/gi,/,?\s*(?:du\s+)?\d{1,2}\s+[A-Za-zÀ-ÿ]+\s+\d{4}/gi,/,?\s*(?:of\s+)?\d{1,2}\s+[A-Za-z]+\s+\d{4}/gi];
 
 function stripTitleNoise(title) {
     if (!title) return title;
