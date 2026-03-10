@@ -1151,12 +1151,7 @@ async function finalizeAndVerify(ev, ctx) {
 }
 
 // ── PORTUGUESE-SPEAKING ECONOMIES ───────────────────────────
-const PORTUGUESE_SPEAKING_ECONOMIES = new Set([
-    'brazil','brasil','portugal','angola','mozambique','moçambique',
-    'cabo verde','cape verde','guinea-bissau','guinea bissau','guiné-bissau',
-    'timor-leste','timor leste','east timor',
-    'são tomé and príncipe','sao tome and principe','sao tome',
-]);
+const PORTUGUESE_SPEAKING_ECONOMIES = new Set(['brazil','brasil','portugal','angola','mozambique','moçambique','cabo verde','cape verde','guinea-bissau','guinea bissau','guiné-bissau','timor-leste','timor leste','east timor','são tomé and príncipe','sao tome and principe','sao tome']);
 function isPortugueseSpeakingEconomy(e){if(!e)return false;const n=e.toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();return PORTUGUESE_SPEAKING_ECONOMIES.has(n)||PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim());}
 function hasPortugueseMarkers(t){return!!t&&(/\bLei\b/i.test(t)||/\bPortaria\b/i.test(t)||/\bResolu[cç][aã]o\b/i.test(t)||/\bDecreto-?Lei\b/i.test(t)||/[ãõ]/.test(t)||/ção\b/i.test(t));}
 
