@@ -28,6 +28,13 @@ Deno.serve(async (req) => {
 
         const rows = await base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0);
 
+        // Excel hard limit: 32,767 chars per cell
+        const xlCell = (v) => {
+            if (v === null || v === undefined) return '';
+            const s = String(v);
+            return s.length > 32767 ? s.slice(0, 32767) : s;
+        };
+
         // ── OUTPUT SHEET — exactly 13 columns, exact order via aoa_to_sheet ──
         const OUTPUT_HEADERS = [
             'ID', 'Economy_Code', 'Economy', 'Language_Doc',
