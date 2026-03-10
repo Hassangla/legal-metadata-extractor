@@ -1749,78 +1749,51 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         }
                         rawOutput += '\n\n=== TOOL URLS EXTRACTED ===\n' + (toolUrls.length ? toolUrls.join('\n') : '(none)');
 
-                        await base44.entities.JobRow.update(row.id, {
-                            status: 'done',
-                            output_json: outputJson,
-                            evidence_json: ev,
-                            raw_llm_output: rawOutput.slice(0, 50000),
-                            input_tokens: inputTokens,
-                            output_tokens: outputTokens,
-                        });
+                        await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'done', output_json: outputJson, evidence_json: ev, raw_llm_output: rawOutput.slice(0, 50000), input_tokens: inputTokens, output_tokens: outputTokens }));
                         processedCount++;
+                        batchInputTokens += inputTokens || 0;
+                        batchOutputTokens += outputTokens || 0;
 
                     } catch (error) {
                         const diagMsg = `[${providerType}/${job.model_id}] ${error.message || 'Unknown error'}`;
                         try {
-                            await base44.entities.JobRow.update(row.id, {
-                                status: 'error',
-                                error_message: diagMsg.slice(0, 500),
-                                raw_llm_output: (content || '').slice(0, 50000),
-                            });
+                            await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: diagMsg.slice(0, 500), raw_llm_output: (content || '').slice(0, 50000) }));
                         } catch (_) {}
+                        batchErrorCount++;
                     }
                 }
 
-                // Brief delay before status aggregation to avoid rate limits
-                await new Promise(r => setTimeout(r, 300));
-                const updatedRows = await base44.entities.JobRow.filter({ job_id });
-                const doneCount  = updatedRows.filter((r) => r.status === 'done').length;
-                const errCount   = updatedRows.filter((r) => r.status === 'error').length;
-                const pendingLeft = updatedRows.filter((r) => r.status === 'pending').length;
-                const newStatus  = pendingLeft === 0 ? 'done' : 'running';
-
-                // Aggregate token usage across all done rows
-                const doneRows = updatedRows.filter(r => r.status === 'done');
-                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
-                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
-
+                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
+                const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
+                const newStatus = pendingLeft <= 0 ? 'done' : 'running';
+                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
+                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
                 const updatePayload = {
-                    processed_rows: doneCount + errCount,
+                    processed_rows: newProcessedRows,
                     status: newStatus,
-                    progress_json: {
-                        current_batch: (job.progress_json?.current_batch || 0) + 1,
-                        last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0,
-                    },
+                    progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount },
                     total_input_tokens: totalInputTokens,
                     total_output_tokens: totalOutputTokens,
                 };
-
-                // Calculate estimated cost every batch
                 if (totalInputTokens > 0 || totalOutputTokens > 0) {
-                    let cost;
-                    if (modelInputPrice > 0) {
-                        cost = estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens);
-                    } else {
-                        cost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                    }
-                    updatePayload.estimated_cost_usd = cost;
+                    updatePayload.estimated_cost_usd = modelInputPrice > 0
+                        ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens)
+                        : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
                 }
-
-                await base44.entities.Job.update(job_id, updatePayload);
-                await new Promise(r => setTimeout(r, 200));
-                const updatedJobs = await base44.entities.Job.filter({ id: job_id });
-                return Response.json({
-                    job: updatedJobs[0],
-                    processed_this_batch: processedCount,
-                    remaining: pendingLeft,
-                });
+                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
+                return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
 
                 } catch (fatalErr) {
-                    const fatalMsg = `Fatal processing error: ${fatalErr.message || 'Unknown'}`;
+                    const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
+                    const retryable = isRateLimitError(fatalErr);
                     try {
-                        await base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) });
+                        if (retryable) {
+                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` }));
+                        } else {
+                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) }));
+                        }
                     } catch (_) {}
-                    return Response.json({ error: fatalMsg }, { status: 500 });
+                    return Response.json({ error: fatalMsg, retryable }, { status: retryable ? 429 : 500 });
                 }
             }
 
@@ -1829,15 +1802,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
-                const rows = await base44.entities.JobRow.filter({ job_id });
-                const statusCounts = {
-                    pending:    rows.filter((r) => r.status === 'pending').length,
-                    processing: rows.filter((r) => r.status === 'processing').length,
-                    done:       rows.filter((r) => r.status === 'done').length,
-                    error:      rows.filter((r) => r.status === 'error').length,
-                };
-
-                return Response.json({ job: jobs[0], statusCounts });
+                const job = jobs[0];
+                const progress = job.progress_json || {};
+                const doneCount = Number(progress.done || 0);
+                const errorCount = Number(progress.error || 0);
+                const processingCount = Number(progress.processing || 0);
+                const pendingCount = typeof progress.pending === 'number'
+                    ? progress.pending
+                    : Math.max((job.total_rows || 0) - doneCount - errorCount - processingCount, 0);
+                const statusCounts = { pending: pendingCount, processing: processingCount, done: doneCount, error: errorCount };
+                return Response.json({ job, statusCounts });
             }
 
             case 'list': {
