@@ -1417,11 +1417,9 @@ Deno.serve(async (req) => {
                 }
 
                 let processedCount = 0;
-
-                // Helper to add delay between rows to avoid Base44 SDK rate limits
-                const interRowDelay = async () => {
-                    await new Promise(r => setTimeout(r, 500));
-                };
+                let batchInputTokens = 0;
+                let batchOutputTokens = 0;
+                let batchErrorCount = 0;
 
                 for (const row of pendingRows) {
                     if (processedCount > 0) await interRowDelay();
