@@ -1887,44 +1887,28 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     return Response.json({ error: 'Job is not running' }, { status: 400 });
                 }
 
-                const allRows = await base44.entities.JobRow.filter({ job_id });
+                // Fetch only pending/processing rows to stop (not all rows)
+                const rowsToStop = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }));
+                const processingRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }));
+                const allToStop = [...rowsToStop, ...processingRows];
                 let stopped = 0;
-                for (const row of allRows) {
-                    if (row.status === 'pending' || row.status === 'processing') {
-                        await base44.entities.JobRow.update(row.id, {
-                            status: 'error',
-                            error_message: 'Stopped by user'
-                        });
-                        stopped++;
-                    }
+                for (const row of allToStop) {
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Stopped by user' }));
+                    stopped++;
                 }
 
-                const doneRows = allRows.filter(r => r.status === 'done');
-                const totalInputTokens = doneRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
-                const totalOutputTokens = doneRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+                // Use already-accumulated token totals from job record instead of re-fetching all rows
+                const totalInputTokens = job.total_input_tokens || 0;
+                const totalOutputTokens = job.total_output_tokens || 0;
+                const stopCost = job.estimated_cost_usd || estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
 
-                // Look up stored pricing for stop cost
-                let stopCost;
-                try {
-                    const catalogEntries = await base44.entities.ModelCatalog.filter({
-                        connection_id: job.connection_id,
-                        model_id: job.model_id,
-                    });
-                    if (catalogEntries.length > 0 && catalogEntries[0].input_price_per_million > 0) {
-                        stopCost = estimateCostFromPricing(catalogEntries[0].input_price_per_million, catalogEntries[0].output_price_per_million || 0, totalInputTokens, totalOutputTokens);
-                    }
-                } catch (_) {}
-                if (stopCost === undefined) {
-                    stopCost = estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                }
-
-                await base44.entities.Job.update(job_id, {
+                await withEntityRetry(() => base44.entities.Job.update(job_id, {
                     status: 'done',
                     error_message: `Stopped by user. ${stopped} rows skipped.`,
                     total_input_tokens: totalInputTokens,
                     total_output_tokens: totalOutputTokens,
                     estimated_cost_usd: stopCost,
-                });
+                }));
 
                 return Response.json({ success: true, stopped });
             }
