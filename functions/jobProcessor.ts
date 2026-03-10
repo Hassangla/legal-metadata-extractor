@@ -1219,23 +1219,23 @@ Deno.serve(async (req) => {
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
-                const allRows = await base44.entities.JobRow.filter({ job_id });
-                const pendingRows = allRows
-                    .filter((r) => r.status === 'pending')
-                    .sort((a, b) => a.row_index - b.row_index)
-                    .slice(0, effectiveBatchSize);
-
+                const pendingRows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', effectiveBatchSize)
+                );
                 if (!pendingRows.length) {
-                    await base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows });
-                    return Response.json({ job: { ...job, status: 'done' }, message: 'All rows processed' });
+                    const doneJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', processed_rows: job.total_rows, progress_json: { ...(job.progress_json || {}), pending: 0, processing: 0, done: job.total_rows || 0 } }));
+                    return Response.json({ job: doneJob, message: 'All rows processed' });
                 }
-
+                const priorProgress = job.progress_json || {};
+                const priorDoneCount = Number(priorProgress.done || 0);
+                const priorErrorCount = Number(priorProgress.error || 0);
+                const estimatedPendingBeforeBatch = Math.max((job.total_rows || 0) - Number(job.processed_rows || 0), 0);
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', progress_json: { ...priorProgress, pending: estimatedPendingBeforeBatch, processing: pendingRows.length, done: priorDoneCount, error: priorErrorCount } }));
                 let processedCount = 0;
-
-                // Helper to add delay between rows to avoid Base44 SDK rate limits
-                const interRowDelay = async () => {
-                    await new Promise(r => setTimeout(r, 500));
-                };
+                let batchInputTokens = 0;
+                let batchOutputTokens = 0;
+                let batchErrorCount = 0;
+                const interRowDelay = async () => { await sleep(500); };
 
                 for (const row of pendingRows) {
                     if (processedCount > 0) await interRowDelay();
