@@ -1894,8 +1894,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
             case 'getRows': {
                 const { job_id } = params;
-                const rows = await base44.entities.JobRow.filter({ job_id });
-                rows.sort((a, b) => a.row_index - b.row_index);
+                const rows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter(
+                        { job_id },
+                        'row_index',
+                        5000,
+                        0
+                    )
+                );
                 return Response.json({ rows });
             }
 
