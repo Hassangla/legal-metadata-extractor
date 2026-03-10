@@ -26,8 +26,7 @@ Deno.serve(async (req) => {
         if (jobs.length === 0) return Response.json({ error: 'Job not found' }, { status: 404 });
         const job = jobs[0];
 
-        const rows = await base44.entities.JobRow.filter({ job_id });
-        rows.sort((a, b) => a.row_index - b.row_index);
+        const rows = await base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0);
 
         // ── OUTPUT SHEET — exactly 13 columns, exact order via aoa_to_sheet ──
         const OUTPUT_HEADERS = [
