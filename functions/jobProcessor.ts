@@ -1661,10 +1661,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         let parsed = extractJSON(content);
 
-                        // ── NORMALIZE any model output format into { evidence: { ...all fields + Final_* } } ──
-
                         if (parsed) {
-                            // Format 1: { "output": {...}, "evidence": {...} } — old spec-style
                             if (parsed.output && !parsed.evidence?.Final_Flag) {
                                 const o = parsed.output;
                                 const e = parsed.evidence || {};
