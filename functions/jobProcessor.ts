@@ -401,28 +401,17 @@ function extractTextContent(providerType, data, isResponsesApi) {
 }
 
 // ── RETRY WITH BACKOFF ──────────────────────────────────────
-
 async function fetchWithRetry(url, init, retries) {
     retries = retries || MAX_RETRIES;
     for (let attempt = 0; attempt <= retries; attempt++) {
         let resp;
-        try {
-            resp = await fetch(url, init);
-        } catch (networkErr) {
-            if (attempt < retries) {
-                const delay = RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500;
-                await new Promise(r => setTimeout(r, delay));
-                continue;
-            }
+        try { resp = await fetch(url, init); } catch (networkErr) {
+            if (attempt < retries) { await sleep(RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500); continue; }
             throw new Error(`Network error calling ${url.split('?')[0]}: ${networkErr.message}`);
         }
         if (resp.ok) return resp;
-        if (resp.status === 429 || resp.status >= 500) {
-            if (attempt < retries) {
-                const delay = RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500;
-                await new Promise(r => setTimeout(r, delay));
-                continue;
-            }
+        if ((resp.status === 429 || resp.status >= 500) && attempt < retries) {
+            await sleep(RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 500); continue;
         }
         const errText = await resp.text();
         throw new Error(`API ${resp.status} from ${url.split('?')[0]}: ${errText.slice(0, 300)}`);
