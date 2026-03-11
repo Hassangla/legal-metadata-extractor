@@ -1952,13 +1952,16 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
             case 'resume': {
                 const { job_id } = params;
-                const resumeJobs = await base44.entities.Job.filter({ id: job_id });
+                const resumeJobs = await withEntityRetry(() => base44.entities.Job.filter({ id: job_id }));
                 if (!resumeJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-                if (resumeJobs[0].status === 'done') return Response.json({ error: 'Job is already done' }, { status: 400 });
-                const stuckRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0));
-                for (const row of stuckRows) await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'pending' }));
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: null }));
-                return Response.json({ success: true });
+                const resumeJob = resumeJobs[0];
+                if (resumeJob.status === 'done') return Response.json({ error: 'Job is already completed' }, { status: 400 });
+                const rp = resumeJob.progress_json || {};
+                const rDone = Number(rp.done || 0), rErr = Number(rp.error || 0), rProc = Number(rp.processing || 0);
+                const rPending = typeof rp.pending === 'number' ? rp.pending : Math.max((resumeJob.total_rows || 0) - rDone - rErr - rProc, 0);
+                if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
+                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
+                return Response.json({ job: updatedResumeJob });
             }
 
             case 'rename': {
