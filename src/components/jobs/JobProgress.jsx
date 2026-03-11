@@ -186,7 +186,9 @@ export default function JobProgress({ jobId, onComplete }) {
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                         <span className="text-slate-500">Progress</span>
-                        <span className="font-medium">{job.processed_rows} / {job.total_rows} rows</span>
+                        <span className="font-medium">
+                            {statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows} / {job.total_rows} rows
+                        </span>
                     </div>
                     <Progress value={progress} className="h-2" />
                 </div>
