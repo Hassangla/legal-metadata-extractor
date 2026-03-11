@@ -1089,11 +1089,11 @@ function estimateCostFromTable(modelId, inTok, outTok) {
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
-        const { action, ...params } = await req.json();
-        // 'process' and 'resume' are invoked by the automation worker (no user token)
-        const isInternal = req.headers.get('X-Base44-Internal') === 'processQueuedJobs';
+        const body = await req.json();
+        const { action, _internal, ...params } = body;
+        // 'process' and 'resume' can be called by automation worker with _internal flag
         let user = null;
-        if (!isInternal || !['process','resume'].includes(action)) {
+        if (!(_internal && ['process','resume'].includes(action))) {
             user = await base44.auth.me();
             if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
         }
