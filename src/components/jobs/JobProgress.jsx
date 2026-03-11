@@ -61,66 +61,7 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     }, [onComplete]);
 
-    // FIX: Auto-kick processing with sequential batch continuation
-    useEffect(() => {
-        if (!job) return;
-
-        const isActive = job.status === 'queued' || job.status === 'running';
-        const hasPending = statusCounts && statusCounts.pending > 0;
-
-        if (isActive && hasPending && !processingRef.current) {
-            processingRef.current = true;
-            processNextBatch();
-        }
-    }, [job?.status, statusCounts?.pending]);
-
-    // Sequential batch processor — processes one batch, refreshes, then continues
-    const processNextBatch = async () => {
-        try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'process',
-                job_id: jobIdRef.current
-            });
-
-            // Refresh status after batch completes
-            const result = await loadJobStatus();
-
-            // If still has pending rows and job is running, process next batch
-            if (result && 
-                result.counts.pending > 0 && 
-                (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
-                // Adaptive delay: increase delay as job progresses to reduce rate limiting risk
-                const batchNumber = (result.jobData.progress_json?.current_batch || 1);
-                const baseDelay = 3000; // 3 second base
-                const maxDelay = 8000;  // 8 seconds max
-                const delay = Math.min(baseDelay + (batchNumber * 200), maxDelay);
-                await new Promise(r => setTimeout(r, delay));
-                // Continue processing if this is still the same job
-                if (processingRef.current) {
-                    processNextBatch();
-                }
-            } else {
-                processingRef.current = false;
-            }
-        } catch (error) {
-            console.error('Batch processing error:', error);
-            processingRef.current = false;
-            
-            // If it looks like a rate limit error, wait longer then retry
-            const isRateLimit = error.message?.includes('429') || error.message?.includes('rate');
-            if (isRateLimit) {
-                toast.error('Rate limited — waiting 30 seconds before retrying...');
-                await new Promise(r => setTimeout(r, 30000));
-                processingRef.current = true;
-                processNextBatch();
-            } else {
-                // Refresh status to show current state
-                await loadJobStatus();
-            }
-        }
-    };
-
-    // FIX: Poll for status updates while processing (read-only check, no processing)
+    // Poll for status updates while the server processes in the background
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
 
