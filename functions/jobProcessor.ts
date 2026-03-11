@@ -1213,9 +1213,6 @@ Deno.serve(async (req) => {
                     }
                 } catch (_) {}
 
-                // Use smaller batch size when web search is enabled to avoid serverless timeout.
-                // Web search calls take 10-20s each; with batch=5 that's 50-100s which exceeds
-                // typical serverless timeouts (30-60s).
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
