@@ -18,18 +18,14 @@ export default function JobProgress({ jobId, onComplete }) {
     const [generating, setGenerating] = useState(false);
     const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
-    const processingRef = useRef(false);  // FIX: guard against overlapping process calls
-    const jobIdRef = useRef(jobId);       // FIX: track current jobId to avoid stale closures
+    const jobIdRef = useRef(jobId);
 
-    // FIX: Keep ref in sync
     useEffect(() => {
         jobIdRef.current = jobId;
     }, [jobId]);
 
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
-        processingRef.current = false;
-        // Reset state so stale data from the previous job isn't shown
         setJob(null);
         setStatusCounts(null);
         setLoading(true);
@@ -38,7 +34,6 @@ export default function JobProgress({ jobId, onComplete }) {
         }
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
-            processingRef.current = false;
         };
     }, [jobId]);
 
