@@ -1813,7 +1813,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0)),
                 ]);
-                const p = pendingRows.length, pr = processingRows.length, er = errorRows.length;
+                const p = pendingRows.length, er = errorRows.length;
+                // If job is done, treat any stuck 'processing' rows as done
+                const pr = (job.status === 'done' || job.status === 'paused') ? 0 : processingRows.length;
                 const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
                 return Response.json({ job, statusCounts });
             }
