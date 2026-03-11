@@ -157,8 +157,8 @@ export default function JobProgress({ jobId, onComplete }) {
         : 0;
 
     const statusConfigMap = {
-        queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Starting...' },
-        running: { icon: RefreshCw, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Processing' },
+        queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Queued' },
+        running: { icon: ServerCog, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Server Processing' },
         done: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-100', label: 'Completed' },
         error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' },
         paused: { icon: Pause, color: 'text-slate-500', bg: 'bg-slate-100', label: 'Paused' }
