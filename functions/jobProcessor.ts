@@ -1176,7 +1176,7 @@ Deno.serve(async (req) => {
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
                     const msg = 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.';
-                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    await db.entities.Job.update(job_id, { status: 'error', error_message: msg });
                     return Response.json({ error: msg }, { status: 400 });
                 }
                 
@@ -1185,7 +1185,7 @@ Deno.serve(async (req) => {
                     apiKey = await decryptString(conn.api_key_encrypted);
                 } catch (decryptErr) {
                     const msg = `Failed to decrypt API key for "${conn.name}": ${decryptErr.message}`;
-                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    await db.entities.Job.update(job_id, { status: 'error', error_message: msg });
                     return Response.json({ error: msg }, { status: 500 });
                 }
 
