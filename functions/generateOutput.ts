@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
 import * as XLSX from 'npm:xlsx@0.18.5';
 
 function uint8ArrayToBase64(uint8Array) {
@@ -11,6 +11,91 @@ function uint8ArrayToBase64(uint8Array) {
         }
     }
     return btoa(binaryString);
+}
+
+// Excel hard limit: 32,767 chars per cell
+const xlCell = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return s.length > 32767 ? s.slice(0, 32767) : s;
+};
+
+const OUTPUT_HEADERS = [
+    'ID', 'Economy_Code', 'Economy', 'Language_Doc',
+    'Instrument_Full_Name_Original_Language', 'Instrument_Published_Name',
+    'Instrument_URL', 'Enactment_Date', 'Date of Entry in Force',
+    'Repeal_Year', 'Current Status', 'Public', 'Flag',
+];
+
+const EVIDENCE_HEADERS = [
+    'Row_Index', 'Economy', 'Economy_Code', 'Legal_basis_verbatim',
+    'Query_1', 'Query_2', 'Query_3',
+    'URLs_Considered', 'Selected_Source_URLs', 'Source_Tier', 'Public_Access',
+    'Raw_Official_Title_As_Source', 'Normalized_Title_Used',
+    'Language_Justification', 'Instrument_URL_Support',
+    'Enactment_Support', 'EntryIntoForce_Support', 'Status_Support',
+    'Missing/Conflict_Reason', 'Normalization_Notes',
+    'Final_Language_Doc', 'Final_Instrument_Full_Name_Original_Language',
+    'Final_Instrument_Published_Name', 'Final_Instrument_URL',
+    'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
+    'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
+];
+
+function rowToOutputAoaRow(row) {
+    const e = row.evidence_json || {};
+    const input = row.input_data || {};
+    return [
+        '',
+        xlCell(e.Economy_Code),
+        xlCell(e.Economy || input.Economy),
+        xlCell(e.Final_Language_Doc),
+        xlCell(e.Final_Instrument_Full_Name_Original_Language),
+        xlCell(e.Final_Instrument_Published_Name),
+        xlCell(e.Final_Instrument_URL),
+        xlCell(e.Final_Enactment_Date),
+        xlCell(e.Final_Date_of_Entry_in_Force),
+        xlCell(e.Final_Repeal_Year),
+        xlCell(e.Final_Current_Status),
+        xlCell(e.Final_Public),
+        xlCell(e.Final_Flag),
+    ];
+}
+
+function rowToEvidenceAoaRow(row) {
+    const e = row.evidence_json || {};
+    const input = row.input_data || {};
+    return [
+        e.Row_Index || row.row_index,
+        xlCell(e.Economy || input.Economy),
+        xlCell(e.Economy_Code),
+        xlCell(e.Legal_basis_verbatim || input.Legal_basis || input['Legal basis']),
+        xlCell(e.Query_1),
+        xlCell(e.Query_2),
+        xlCell(e.Query_3),
+        xlCell(e.URLs_Considered),
+        xlCell(e.Selected_Source_URLs),
+        xlCell(e.Source_Tier || e.Tier),
+        xlCell(e.Public_Access),
+        xlCell(e.Raw_Official_Title_As_Source),
+        xlCell(e.Normalized_Title_Used),
+        xlCell(e.Language_Justification),
+        xlCell(e.Instrument_URL_Support),
+        xlCell(e.Enactment_Support),
+        xlCell(e.EntryIntoForce_Support),
+        xlCell(e.Status_Support),
+        xlCell(e.Missing_Conflict_Reason || e['Missing/Conflict_Reason']),
+        xlCell(e.Normalization_Notes),
+        xlCell(e.Final_Language_Doc),
+        xlCell(e.Final_Instrument_Full_Name_Original_Language),
+        xlCell(e.Final_Instrument_Published_Name),
+        xlCell(e.Final_Instrument_URL),
+        xlCell(e.Final_Enactment_Date),
+        xlCell(e.Final_Date_of_Entry_in_Force),
+        xlCell(e.Final_Repeal_Year),
+        xlCell(e.Final_Current_Status),
+        xlCell(e.Final_Public),
+        xlCell(e.Final_Flag),
+    ];
 }
 
 Deno.serve(async (req) => {
@@ -26,114 +111,42 @@ Deno.serve(async (req) => {
         if (jobs.length === 0) return Response.json({ error: 'Job not found' }, { status: 404 });
         const job = jobs[0];
 
-        // Fetch only fields needed for Excel — exclude raw_llm_output to stay under memory limits
-        const rows = await base44.entities.JobRow.filter(
-            { job_id },
-            'row_index',
-            5000,
-            0,
-            ['id', 'job_id', 'row_index', 'input_data', 'evidence_json', 'output_json', 'status', 'error_message']
-        );
-
-        // Excel hard limit: 32,767 chars per cell
-        const xlCell = (v) => {
-            if (v === null || v === undefined) return '';
-            const s = String(v);
-            return s.length > 32767 ? s.slice(0, 32767) : s;
-        };
-
-        // ── OUTPUT SHEET — exactly 13 columns, exact order via aoa_to_sheet ──
-        const OUTPUT_HEADERS = [
-            'ID', 'Economy_Code', 'Economy', 'Language_Doc',
-            'Instrument_Full_Name_Original_Language', 'Instrument_Published_Name',
-            'Instrument_URL', 'Enactment_Date', 'Date of Entry in Force',
-            'Repeal_Year', 'Current Status', 'Public', 'Flag',
-        ];
-
+        // Fetch rows in pages of 200 to avoid memory limits
+        const PAGE_SIZE = 200;
         const outputAoa = [OUTPUT_HEADERS];
-        for (const row of rows) {
-            const e = row.evidence_json || {};
-            const input = row.input_data || {};
-            outputAoa.push([
-                '',
-                xlCell(e.Economy_Code),
-                xlCell(e.Economy || input.Economy),
-                xlCell(e.Final_Language_Doc),
-                xlCell(e.Final_Instrument_Full_Name_Original_Language),
-                xlCell(e.Final_Instrument_Published_Name),
-                xlCell(e.Final_Instrument_URL),
-                xlCell(e.Final_Enactment_Date),
-                xlCell(e.Final_Date_of_Entry_in_Force),
-                xlCell(e.Final_Repeal_Year),
-                xlCell(e.Final_Current_Status),
-                xlCell(e.Final_Public),
-                xlCell(e.Final_Flag),
-            ]);
-        }
-
-        // ── EVIDENCE SHEET — exact column order via aoa_to_sheet ──
-        const EVIDENCE_HEADERS = [
-            'Row_Index', 'Economy', 'Economy_Code', 'Legal_basis_verbatim',
-            'Query_1', 'Query_2', 'Query_3',
-            'URLs_Considered', 'Selected_Source_URLs', 'Source_Tier', 'Public_Access',
-            'Raw_Official_Title_As_Source', 'Normalized_Title_Used',
-            'Language_Justification', 'Instrument_URL_Support',
-            'Enactment_Support', 'EntryIntoForce_Support', 'Status_Support',
-            'Missing/Conflict_Reason', 'Normalization_Notes',
-            'Final_Language_Doc', 'Final_Instrument_Full_Name_Original_Language',
-            'Final_Instrument_Published_Name', 'Final_Instrument_URL',
-            'Final_Enactment_Date', 'Final_Date_of_Entry_in_Force',
-            'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
-        ];
-
         const evidenceAoa = [EVIDENCE_HEADERS];
-        for (const row of rows) {
-            const e = row.evidence_json || {};
-            const input = row.input_data || {};
-            evidenceAoa.push([
-                e.Row_Index || row.row_index,
-                xlCell(e.Economy || input.Economy),
-                xlCell(e.Economy_Code),
-                xlCell(e.Legal_basis_verbatim || input.Legal_basis || input['Legal basis']),
-                xlCell(e.Query_1),
-                xlCell(e.Query_2),
-                xlCell(e.Query_3),
-                xlCell(e.URLs_Considered),
-                xlCell(e.Selected_Source_URLs),
-                xlCell(e.Source_Tier || e.Tier),
-                xlCell(e.Public_Access),
-                xlCell(e.Raw_Official_Title_As_Source),
-                xlCell(e.Normalized_Title_Used),
-                xlCell(e.Language_Justification),
-                xlCell(e.Instrument_URL_Support),
-                xlCell(e.Enactment_Support),
-                xlCell(e.EntryIntoForce_Support),
-                xlCell(e.Status_Support),
-                xlCell(e.Missing_Conflict_Reason || e['Missing/Conflict_Reason']),
-                xlCell(e.Normalization_Notes),
-                xlCell(e.Final_Language_Doc),
-                xlCell(e.Final_Instrument_Full_Name_Original_Language),
-                xlCell(e.Final_Instrument_Published_Name),
-                xlCell(e.Final_Instrument_URL),
-                xlCell(e.Final_Enactment_Date),
-                xlCell(e.Final_Date_of_Entry_in_Force),
-                xlCell(e.Final_Repeal_Year),
-                xlCell(e.Final_Current_Status),
-                xlCell(e.Final_Public),
-                xlCell(e.Final_Flag),
-            ]);
+
+        let skip = 0;
+        while (true) {
+            const page = await base44.entities.JobRow.filter(
+                { job_id },
+                'row_index',
+                PAGE_SIZE,
+                skip,
+                ['row_index', 'input_data', 'evidence_json', 'status', 'error_message']
+            );
+            if (!page.length) break;
+
+            for (const row of page) {
+                outputAoa.push(rowToOutputAoaRow(row));
+                evidenceAoa.push(rowToEvidenceAoaRow(row));
+                // Drop references so GC can collect each row after use
+                row.evidence_json = null;
+                row.input_data = null;
+            }
+
+            if (page.length < PAGE_SIZE) break;
+            skip += PAGE_SIZE;
         }
 
         const wb = XLSX.utils.book_new();
-        const wsOutput = XLSX.utils.aoa_to_sheet(outputAoa);
-        XLSX.utils.book_append_sheet(wb, wsOutput, 'Output');
-        const wsEvidence = XLSX.utils.aoa_to_sheet(evidenceAoa);
-        XLSX.utils.book_append_sheet(wb, wsEvidence, 'Evidence');
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outputAoa), 'Output');
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(evidenceAoa), 'Evidence');
 
         const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         const base64Data = uint8ArrayToBase64(new Uint8Array(buffer));
 
-        // Generate Eastern Time timestamp using reliable Intl.DateTimeFormat
+        // Generate Eastern Time timestamp
         const now = new Date();
         const fmt = new Intl.DateTimeFormat('en-US', {
             timeZone: 'America/New_York',
