@@ -75,7 +75,7 @@ export default function JobProgress({ jobId, onComplete }) {
         };
     }, [job?.status, loadJobStatus]);
 
-    // Resume: set job back to queued so the automation picks it up
+    // Resume: marks job as queued so the server automation picks it up
     const handleResume = async () => {
         setResuming(true);
         try {
@@ -84,27 +84,29 @@ export default function JobProgress({ jobId, onComplete }) {
                 job_id: jobId
             });
             await loadJobStatus();
+            toast.success('Task resumed — server will continue processing shortly');
         } catch (error) {
-            toast.error('Failed to resume');
+            console.error('Failed to resume:', error);
+            toast.error('Failed to resume processing');
         } finally {
             setResuming(false);
         }
     };
 
-    const handleStop = async () => {
-        if (!confirm('Stop this task? Already-processed rows will be kept.')) return;
-        setStopping(true);
+    // Pause: non-destructive — pending rows stay pending, job can be resumed
+    const handlePause = async () => {
+        setPausing(true);
         try {
             await base44.functions.invoke('jobProcessor', {
-                action: 'stop',
+                action: 'pause',
                 job_id: jobId
             });
-            toast.success('Task stopped');
+            toast.success('Task paused');
             await loadJobStatus();
         } catch (error) {
-            toast.error('Failed to stop task');
+            toast.error('Failed to pause task');
         } finally {
-            setStopping(false);
+            setPausing(false);
         }
     };
 
