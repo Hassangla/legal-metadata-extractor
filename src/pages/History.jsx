@@ -227,7 +227,7 @@ export default function History() {
                                                     <div className="flex items-center gap-2">
                                                         <div className="text-right mr-2">
                                                             <p className="text-sm font-medium">
-                                                                {job.processed_rows}/{job.total_rows}
+                                                                {job.status === 'done' ? job.total_rows : job.processed_rows}/{job.total_rows}
                                                             </p>
                                                             <Badge className={`${status.bg} ${status.color}`}>
                                                                 {status.label}
