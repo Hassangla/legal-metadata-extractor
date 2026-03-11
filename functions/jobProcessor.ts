@@ -1907,71 +1907,50 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
             case 'stop': {
                 const { job_id } = params;
-                const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
-                const job = jobs[0];
-                if (job.status !== 'running' && job.status !== 'queued') {
-                    return Response.json({ error: 'Job is not running' }, { status: 400 });
-                }
-
-                // Fetch only pending/processing rows to stop (not all rows)
-                const rowsToStop = await withEntityRetry(() =>
-                    base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)
-                );
-                const processingRows = await withEntityRetry(() =>
-                    base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)
-                );
-                const allToStop = [...rowsToStop, ...processingRows];
+                const stopJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!stopJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+                const stopJob = stopJobs[0];
+                if (stopJob.status !== 'running' && stopJob.status !== 'queued') return Response.json({ error: 'Job is not running' }, { status: 400 });
+                const [rowsToStop, processingRows2] = await Promise.all([
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
+                ]);
                 let stopped = 0;
-                for (const row of allToStop) {
+                for (const row of [...rowsToStop, ...processingRows2]) {
                     await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Stopped by user' }));
                     stopped++;
                 }
-
-                // Use already-accumulated token totals from job record instead of re-fetching all rows
-                const totalInputTokens = job.total_input_tokens || 0;
-                const totalOutputTokens = job.total_output_tokens || 0;
-                const stopCost = job.estimated_cost_usd || estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-
-                await withEntityRetry(() => base44.entities.Job.update(job_id, {
-                    status: 'done',
-                    error_message: `Stopped by user. ${stopped} rows skipped.`,
-                    total_input_tokens: totalInputTokens,
-                    total_output_tokens: totalOutputTokens,
-                    estimated_cost_usd: stopCost,
-                }));
-
+                const stopInTok = stopJob.total_input_tokens || 0;
+                const stopOutTok = stopJob.total_output_tokens || 0;
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', error_message: `Stopped by user. ${stopped} rows skipped.`, total_input_tokens: stopInTok, total_output_tokens: stopOutTok, estimated_cost_usd: stopJob.estimated_cost_usd || estimateCostFromTable(stopJob.model_id, stopInTok, stopOutTok) }));
                 return Response.json({ success: true, stopped });
+            }
+
+            case 'resume': {
+                const { job_id } = params;
+                const resumeJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!resumeJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+                if (resumeJobs[0].status === 'done') return Response.json({ error: 'Job is already done' }, { status: 400 });
+                const stuckRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0));
+                for (const row of stuckRows) await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'pending' }));
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: null }));
+                return Response.json({ success: true });
             }
 
             case 'rename': {
                 const { job_id, task_name } = params;
-                const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
+                const renameJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!renameJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 await base44.entities.Job.update(job_id, { task_name: task_name || '' });
                 return Response.json({ success: true });
             }
 
             case 'deleteJob': {
                 const { job_id } = params;
-                const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
-                // Delete all associated rows first
-                const rows = await withEntityRetry(() =>
-                    base44.entities.JobRow.filter(
-                        { job_id },
-                        'row_index',
-                        5000,
-                        0,
-                        ['id']
-                    )
-                );
-                for (const row of rows) {
-                    await withEntityRetry(() => base44.entities.JobRow.delete(row.id));
-                }
+                const delJobs = await base44.entities.Job.filter({ id: job_id });
+                if (!delJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+                const delRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0, ['id']));
+                for (const row of delRows) await withEntityRetry(() => base44.entities.JobRow.delete(row.id));
                 await base44.entities.Job.delete(job_id);
                 return Response.json({ success: true });
             }
