@@ -1908,6 +1908,27 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 return Response.json({ rows });
             }
 
+            case 'pause': {
+                const { job_id } = params;
+                const pauseJobs = await withEntityRetry(() => base44.entities.Job.filter({ id: job_id }));
+                if (!pauseJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+                const pauseJob = pauseJobs[0];
+                if (pauseJob.status !== 'running' && pauseJob.status !== 'queued') return Response.json({ error: 'Job is not active' }, { status: 400 });
+                const processingRowsForPause = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0, ['id'])
+                );
+                for (const row of processingRowsForPause) {
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'pending' }));
+                }
+                const pauseProgress = pauseJob.progress_json || {};
+                const pausePendingCount = Number(pauseProgress.pending || 0) + processingRowsForPause.length;
+                const pausedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, {
+                    status: 'paused',
+                    progress_json: { ...pauseProgress, pending: pausePendingCount, processing: 0 },
+                }));
+                return Response.json({ job: pausedJob });
+            }
+
             case 'stop': {
                 const { job_id } = params;
                 const stopJobs = await base44.entities.Job.filter({ id: job_id });
