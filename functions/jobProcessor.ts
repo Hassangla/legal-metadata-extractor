@@ -1163,11 +1163,11 @@ Deno.serve(async (req) => {
                 // instead of leaving it stuck in 'running'.
                 try {
 
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running' }));
+                await withEntityRetry(() => db.entities.Job.update(job_id, { status: 'running' }));
 
-                const connections = await withEntityRetry(() => base44.entities.APIConnection.filter({ id: job.connection_id }));
+                const connections = await withEntityRetry(() => db.entities.APIConnection.filter({ id: job.connection_id }));
                 if (!connections.length) {
-                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found. Was it deleted?' });
+                    await db.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found. Was it deleted?' });
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
