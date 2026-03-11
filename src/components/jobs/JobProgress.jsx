@@ -154,8 +154,9 @@ export default function JobProgress({ jobId, onComplete }) {
 
     if (!job) return null;
 
+    const actualProcessed = statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows;
     const progress = job.total_rows > 0 
-        ? Math.round((job.processed_rows / job.total_rows) * 100) 
+        ? Math.round((actualProcessed / job.total_rows) * 100) 
         : 0;
 
     const statusConfigMap = {
