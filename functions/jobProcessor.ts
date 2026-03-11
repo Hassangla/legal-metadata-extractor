@@ -1806,14 +1806,20 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 const job = jobs[0];
-                const progress = job.progress_json || {};
-                const doneCount = Number(progress.done || 0);
-                const errorCount = Number(progress.error || 0);
-                const processingCount = Number(progress.processing || 0);
-                const pendingCount = typeof progress.pending === 'number'
-                    ? progress.pending
-                    : Math.max((job.total_rows || 0) - doneCount - errorCount - processingCount, 0);
-                const statusCounts = { pending: pendingCount, processing: processingCount, done: doneCount, error: errorCount };
+
+                // Count actual JobRow records by status — progress_json can drift due to retries/reruns
+                const [allPending, allProcessing, allDone, allError] = await Promise.all([
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0, ['id'])),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0, ['id'])),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'done' }, 'row_index', 5000, 0, ['id'])),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0, ['id'])),
+                ]);
+                const statusCounts = {
+                    pending: allPending.length,
+                    processing: allProcessing.length,
+                    done: allDone.length,
+                    error: allError.length,
+                };
                 return Response.json({ job, statusCounts });
             }
 
