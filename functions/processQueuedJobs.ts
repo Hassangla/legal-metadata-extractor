@@ -77,9 +77,10 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke jobProcessor's process action via service role
+            // Invoke jobProcessor's process action
+            // Use base44 (not serviceBase44) so the automation's auth context is forwarded
             try {
-                const result = await serviceBase44.functions.invoke('jobProcessor', {
+                const result = await base44.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id: jobId,
                     _internal: true,
