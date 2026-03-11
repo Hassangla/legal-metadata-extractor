@@ -100,7 +100,6 @@ export default function JobProgress({ jobId, onComplete }) {
                 job_id: jobId
             });
             toast.success('Task stopped');
-            processingRef.current = false;
             await loadJobStatus();
         } catch (error) {
             toast.error('Failed to stop task');
