@@ -18,28 +18,19 @@ export default function JobProgress({ jobId, onComplete }) {
     const [generating, setGenerating] = useState(false);
     const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
-    const processingRef = useRef(false);  // FIX: guard against overlapping process calls
-    const jobIdRef = useRef(jobId);       // FIX: track current jobId to avoid stale closures
+    const jobIdRef = useRef(jobId);
 
-    // FIX: Keep ref in sync
     useEffect(() => {
         jobIdRef.current = jobId;
     }, [jobId]);
 
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
-        processingRef.current = false;
-        // Reset state so stale data from the previous job isn't shown
         setJob(null);
         setStatusCounts(null);
         setLoading(true);
-        if (jobId) {
-            loadJobStatus();
-        }
-        return () => {
-            if (pollRef.current) clearInterval(pollRef.current);
-            processingRef.current = false;
-        };
+        if (jobId) loadJobStatus();
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
     }, [jobId]);
 
     const loadJobStatus = useCallback(async () => {
@@ -52,11 +43,7 @@ export default function JobProgress({ jobId, onComplete }) {
             const counts = response.data.statusCounts;
             setJob(jobData);
             setStatusCounts(counts);
-            
-            if (jobData.status === 'done') {
-                onComplete?.(jobData);
-            }
-
+            if (jobData.status === 'done') onComplete?.(jobData);
             return { jobData, counts };
         } catch (error) {
             console.error('Failed to load job status:', error);
@@ -66,90 +53,24 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     }, [onComplete]);
 
-    // FIX: Auto-kick processing with sequential batch continuation
-    useEffect(() => {
-        if (!job) return;
-
-        const isActive = job.status === 'queued' || job.status === 'running';
-        const hasPending = statusCounts && statusCounts.pending > 0;
-
-        if (isActive && hasPending && !processingRef.current) {
-            processingRef.current = true;
-            processNextBatch();
-        }
-    }, [job?.status, statusCounts?.pending]);
-
-    // Sequential batch processor — processes one batch, refreshes, then continues
-    const processNextBatch = async () => {
-        try {
-            const response = await base44.functions.invoke('jobProcessor', {
-                action: 'process',
-                job_id: jobIdRef.current
-            });
-
-            // Refresh status after batch completes
-            const result = await loadJobStatus();
-
-            // If still has pending rows and job is running, process next batch
-            if (result && 
-                result.counts.pending > 0 && 
-                (result.jobData.status === 'queued' || result.jobData.status === 'running')) {
-                // Adaptive delay: increase delay as job progresses to reduce rate limiting risk
-                const batchNumber = (result.jobData.progress_json?.current_batch || 1);
-                const baseDelay = 3000; // 3 second base
-                const maxDelay = 8000;  // 8 seconds max
-                const delay = Math.min(baseDelay + (batchNumber * 200), maxDelay);
-                await new Promise(r => setTimeout(r, delay));
-                // Continue processing if this is still the same job
-                if (processingRef.current) {
-                    processNextBatch();
-                }
-            } else {
-                processingRef.current = false;
-            }
-        } catch (error) {
-            console.error('Batch processing error:', error);
-            processingRef.current = false;
-            
-            // If it looks like a rate limit error, wait longer then retry
-            const isRateLimit = error.message?.includes('429') || error.message?.includes('rate');
-            if (isRateLimit) {
-                toast.error('Rate limited — waiting 30 seconds before retrying...');
-                await new Promise(r => setTimeout(r, 30000));
-                processingRef.current = true;
-                processNextBatch();
-            } else {
-                // Refresh status to show current state
-                await loadJobStatus();
-            }
-        }
-    };
-
-    // FIX: Poll for status updates while processing (read-only check, no processing)
+    // Poll for status updates — read-only, no processing
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
-
         const isActive = job?.status === 'queued' || job?.status === 'running';
-        if (isActive) {
-            pollRef.current = setInterval(loadJobStatus, 5000);
-        }
-
-        return () => {
-            if (pollRef.current) clearInterval(pollRef.current);
-        };
+        if (isActive) pollRef.current = setInterval(loadJobStatus, 8000);
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
     }, [job?.status, loadJobStatus]);
 
-    // FIX: Resume uses 'process' action (not 'start')
+    // Resume: set job back to queued so the automation picks it up
     const handleResume = async () => {
         setResuming(true);
         try {
             await base44.functions.invoke('jobProcessor', {
-                action: 'process',
+                action: 'resume',
                 job_id: jobId
             });
             await loadJobStatus();
-            // Re-trigger the auto-kick loop
-            processingRef.current = false;
+            toast.success('Job re-queued — the background worker will resume it shortly.');
         } catch (error) {
             toast.error('Failed to resume');
         } finally {
