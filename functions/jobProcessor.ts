@@ -1154,8 +1154,11 @@ Deno.serve(async (req) => {
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 const job = jobs[0];
-                if (job.status === 'done' || job.status === 'error') {
+                if (job.status === 'done') {
                     return Response.json({ job, message: 'Job already completed' });
+                }
+                if (job.status === 'paused') {
+                    return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
                 }
 
                 // Wrap entire processing in try-catch so fatal errors set job to 'error'
