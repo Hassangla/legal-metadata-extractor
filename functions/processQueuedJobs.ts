@@ -77,13 +77,29 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke jobProcessor's process action
+            // Invoke jobProcessor's process action via a direct HTTP call
+            // (SDK function invoke carries no user token when called from automation,
+            //  so we use a raw fetch to the function endpoint with the service role header)
             try {
-                const result = await serviceBase44.functions.invoke('jobProcessor', {
-                    action: 'process',
-                    job_id: jobId,
+                const appId = Deno.env.get('BASE44_APP_ID');
+                const processUrl = `https://api.base44.app/api/apps/${appId}/functions/jobProcessor`;
+
+                const resp = await fetch(processUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // Pass a special header so jobProcessor can identify this as an internal call
+                        'X-Base44-Internal': 'processQueuedJobs',
+                    },
+                    body: JSON.stringify({ action: 'process', job_id: jobId }),
                 });
 
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`jobProcessor returned ${resp.status}: ${errText.slice(0, 300)}`);
+                }
+
+                const result = await resp.json();
                 batchesProcessed++;
                 const remaining = result?.remaining ?? pendingRows.length;
                 lastStatus = result?.job?.status ?? 'running';
@@ -99,12 +115,10 @@ Deno.serve(async (req) => {
                 }
             } catch (batchErr) {
                 console.error(`[processQueuedJobs] Batch error: ${batchErr.message}`);
-                // If rate limited, break and let next automation run pick it up
                 if (/429|rate.?limit/i.test(batchErr.message || '')) {
                     console.log(`[processQueuedJobs] Rate limited — stopping early, will resume next run`);
                     break;
                 }
-                // Non-retryable error — mark job error
                 await serviceBase44.entities.Job.update(jobId, {
                     status: 'error',
                     error_message: `Worker error: ${batchErr.message?.slice(0, 400)}`,
