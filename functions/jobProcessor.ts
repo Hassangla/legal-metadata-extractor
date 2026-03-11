@@ -1091,12 +1091,10 @@ Deno.serve(async (req) => {
         const base44 = createClientFromRequest(req);
         const body = await req.json();
         const { action, _internal, ...params } = body;
-        // 'process' and 'resume' can be called by automation worker with _internal flag
+        const skipAuth = !!_internal && ['process','resume'].includes(action);
         let user = null;
-        if (!(_internal && ['process','resume'].includes(action))) {
-            user = await base44.auth.me();
-            if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        if (!skipAuth) { try { user = await base44.auth.me(); } catch (_e) {} if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 }); }
+        const db = skipAuth ? base44.asServiceRole : base44;
         switch (action) {
 
             case 'create': {
