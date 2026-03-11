@@ -1807,19 +1807,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                 const job = jobs[0];
 
-                // Count actual JobRow records by status — progress_json can drift due to retries/reruns
-                const [allPending, allProcessing, allDone, allError] = await Promise.all([
-                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0, ['id'])),
-                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0, ['id'])),
-                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'done' }, 'row_index', 5000, 0, ['id'])),
-                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0, ['id'])),
+                // Count actual JobRow records — progress_json.done can drift due to retries
+                const [pendingRows, processingRows, errorRows] = await Promise.all([
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0)),
                 ]);
-                const statusCounts = {
-                    pending: allPending.length,
-                    processing: allProcessing.length,
-                    done: allDone.length,
-                    error: allError.length,
-                };
+                const p = pendingRows.length, pr = processingRows.length, er = errorRows.length;
+                const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
                 return Response.json({ job, statusCounts });
             }
 
