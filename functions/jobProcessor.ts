@@ -1945,6 +1945,21 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 return Response.json({ success: true, stopped });
             }
 
+            case 'resume': {
+                const { job_id } = params;
+                const jobs = await base44.entities.Job.filter({ id: job_id });
+                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+                // Reset any stuck 'processing' rows back to 'pending'
+                const stuckRows = await withEntityRetry(() =>
+                    base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)
+                );
+                for (const row of stuckRows) {
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'pending' }));
+                }
+                await base44.entities.Job.update(job_id, { status: 'queued', error_message: null });
+                return Response.json({ success: true });
+            }
+
             case 'rename': {
                 const { job_id, task_name } = params;
                 const jobs = await base44.entities.Job.filter({ id: job_id });
