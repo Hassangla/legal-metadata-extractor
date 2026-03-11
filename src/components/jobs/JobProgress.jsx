@@ -6,7 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { 
     Play, Pause, Download, RefreshCw, Loader2, CheckCircle, 
-    XCircle, AlertCircle, Clock
+    XCircle, AlertCircle, Clock, ServerCog
 } from 'lucide-react';
 import { toast } from 'sonner';
 
