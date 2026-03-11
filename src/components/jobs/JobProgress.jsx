@@ -75,17 +75,15 @@ export default function JobProgress({ jobId, onComplete }) {
         };
     }, [job?.status, loadJobStatus]);
 
-    // FIX: Resume uses 'process' action (not 'start')
+    // Resume: set job back to queued so the automation picks it up
     const handleResume = async () => {
         setResuming(true);
         try {
             await base44.functions.invoke('jobProcessor', {
-                action: 'process',
+                action: 'resume',
                 job_id: jobId
             });
             await loadJobStatus();
-            // Re-trigger the auto-kick loop
-            processingRef.current = false;
         } catch (error) {
             toast.error('Failed to resume');
         } finally {
