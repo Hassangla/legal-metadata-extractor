@@ -1089,12 +1089,11 @@ function estimateCostFromTable(modelId, inTok, outTok) {
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
-        const body = await req.json();
-        const { action, _internal, ...params } = body;
-        const skipAuth = !!_internal && ['process','resume'].includes(action);
-        let user = null;
-        if (!skipAuth) { try { user = await base44.auth.me(); } catch (_e) {} if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 }); }
-        const db = skipAuth ? base44.asServiceRole : base44;
+        const user = await base44.auth.me();
+        if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+        const { action, ...params } = await req.json();
+
         switch (action) {
 
             case 'create': {
@@ -1151,7 +1150,7 @@ Deno.serve(async (req) => {
 
             case 'process': {
                 const { job_id } = params;
-                const jobs = await db.entities.Job.filter({ id: job_id });
+                const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 const job = jobs[0];
@@ -1163,11 +1162,11 @@ Deno.serve(async (req) => {
                 // instead of leaving it stuck in 'running'.
                 try {
 
-                await withEntityRetry(() => db.entities.Job.update(job_id, { status: 'running' }));
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running' }));
 
-                const connections = await withEntityRetry(() => db.entities.APIConnection.filter({ id: job.connection_id }));
+                const connections = await withEntityRetry(() => base44.entities.APIConnection.filter({ id: job.connection_id }));
                 if (!connections.length) {
-                    await db.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found. Was it deleted?' });
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: 'API connection not found. Was it deleted?' });
                     return Response.json({ error: 'Connection not found' }, { status: 404 });
                 }
                 const conn = connections[0];
@@ -1176,7 +1175,7 @@ Deno.serve(async (req) => {
                 // Block legacy OpenRouter connections
                 if (providerType === 'openrouter') {
                     const msg = 'This connection type (OpenRouter) has been removed. Create an OpenAI connection and retry.';
-                    await db.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
                     return Response.json({ error: msg }, { status: 400 });
                 }
                 
@@ -1185,11 +1184,11 @@ Deno.serve(async (req) => {
                     apiKey = await decryptString(conn.api_key_encrypted);
                 } catch (decryptErr) {
                     const msg = `Failed to decrypt API key for "${conn.name}": ${decryptErr.message}`;
-                    await db.entities.Job.update(job_id, { status: 'error', error_message: msg });
+                    await base44.entities.Job.update(job_id, { status: 'error', error_message: msg });
                     return Response.json({ error: msg }, { status: 500 });
                 }
 
-                const specVersions = await withEntityRetry(() => db.entities.SpecVersion.filter({ id: job.spec_version_id }));
+                const specVersions = await withEntityRetry(() => base44.entities.SpecVersion.filter({ id: job.spec_version_id }));
                 const specText = specVersions[0]?.spec_text || '';
 
                 const economyMap = {};
@@ -1214,6 +1213,9 @@ Deno.serve(async (req) => {
                     }
                 } catch (_) {}
 
+                // Use smaller batch size when web search is enabled to avoid serverless timeout.
+                // Web search calls take 10-20s each; with batch=5 that's 50-100s which exceeds
+                // typical serverless timeouts (30-60s).
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
@@ -1941,21 +1943,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 }));
 
                 return Response.json({ success: true, stopped });
-            }
-
-            case 'resume': {
-                const { job_id } = params;
-                const jobs = await base44.entities.Job.filter({ id: job_id });
-                if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-                // Reset any stuck 'processing' rows back to 'pending'
-                const stuckRows = await withEntityRetry(() =>
-                    base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)
-                );
-                for (const row of stuckRows) {
-                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'pending' }));
-                }
-                await base44.entities.Job.update(job_id, { status: 'queued', error_message: null });
-                return Response.json({ success: true });
             }
 
             case 'rename': {
