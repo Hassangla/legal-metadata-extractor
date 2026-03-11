@@ -262,21 +262,21 @@ export default function JobProgress({ jobId, onComplete }) {
                 <div className="flex gap-2 pt-2">
                     {isActive && (
                         <Button
-                            variant="destructive"
-                            onClick={handleStop}
-                            disabled={stopping}
+                            variant="outline"
+                            onClick={handlePause}
+                            disabled={pausing}
                             className="gap-2"
                         >
-                            {stopping ? (
+                            {pausing ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
-                                <XCircle className="w-4 h-4" />
+                                <Pause className="w-4 h-4" />
                             )}
-                            Stop
+                            Pause
                         </Button>
                     )}
 
-                    {job.status === 'error' && statusCounts && statusCounts.pending > 0 && (
+                    {(job.status === 'error' || job.status === 'paused') && statusCounts && statusCounts.pending > 0 && (
                         <Button
                             onClick={handleResume}
                             disabled={resuming}
