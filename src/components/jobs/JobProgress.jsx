@@ -248,28 +248,30 @@ export default function JobProgress({ jobId, onComplete }) {
                     </div>
                 )}
 
+                {/* Server-processing notice */}
+                {isActive && (
+                    <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+                        <ServerCog className="w-4 h-4 animate-pulse shrink-0" />
+                        <span>Processing on the server — you can close this tab safely.</span>
+                    </div>
+                )}
+
                 {/* Actions */}
                 <div className="flex gap-2 pt-2">
                     {isActive && (
-                        <>
-                            <Button disabled className="flex-1 gap-2">
+                        <Button
+                            variant="destructive"
+                            onClick={handleStop}
+                            disabled={stopping}
+                            className="gap-2"
+                        >
+                            {stopping ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                Processing...
-                            </Button>
-                            <Button
-                                variant="destructive"
-                                onClick={handleStop}
-                                disabled={stopping}
-                                className="gap-2"
-                            >
-                                {stopping ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                    <XCircle className="w-4 h-4" />
-                                )}
-                                Stop
-                            </Button>
-                        </>
+                            ) : (
+                                <XCircle className="w-4 h-4" />
+                            )}
+                            Stop
+                        </Button>
                     )}
 
                     {job.status === 'error' && statusCounts && statusCounts.pending > 0 && (
