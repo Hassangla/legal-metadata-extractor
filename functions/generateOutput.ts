@@ -26,7 +26,14 @@ Deno.serve(async (req) => {
         if (jobs.length === 0) return Response.json({ error: 'Job not found' }, { status: 404 });
         const job = jobs[0];
 
-        const rows = await base44.entities.JobRow.filter({ job_id }, 'row_index', 5000, 0);
+        // Fetch only fields needed for Excel — exclude raw_llm_output to stay under memory limits
+        const rows = await base44.entities.JobRow.filter(
+            { job_id },
+            'row_index',
+            5000,
+            0,
+            ['id', 'job_id', 'row_index', 'input_data', 'evidence_json', 'output_json', 'status', 'error_message']
+        );
 
         // Excel hard limit: 32,767 chars per cell
         const xlCell = (v) => {
