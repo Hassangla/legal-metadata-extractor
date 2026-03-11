@@ -1151,7 +1151,7 @@ Deno.serve(async (req) => {
 
             case 'process': {
                 const { job_id } = params;
-                const jobs = await base44.entities.Job.filter({ id: job_id });
+                const jobs = await db.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 const job = jobs[0];
