@@ -443,20 +443,16 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
         if (Array.isArray(data?.output)) {
             for (const item of data.output) {
                 if (item.type === 'message' && Array.isArray(item.content)) {
-                    for (const part of item.content) {
-                        if (part.annotations && Array.isArray(part.annotations)) {
-                            for (const ann of part.annotations) {
-                                if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
-                            }
-                        }
-                        if (Array.isArray(part?.citations)) {
-                            for (const c of part.citations) { if (c?.url) urls.push(c.url); }
-                        }
-                        // Also extract URLs from the text content itself (model may embed URLs)
-                        if (part.text && typeof part.text === 'string') {
-                            for (const u of extractUrlsFromText(part.text)) urls.push(u);
+                for (const part of item.content) {
+                    if (part.annotations && Array.isArray(part.annotations)) {
+                        for (const ann of part.annotations) {
+                            if (ann.type === 'url_citation' && ann.url) urls.push(ann.url);
                         }
                     }
+                    if (Array.isArray(part?.citations)) {
+                        for (const c of part.citations) { if (c?.url) urls.push(c.url); }
+                    }
+                }
                 }
                 if (item.type === 'web_search_call') {
                     collectUrlsDeep(item, urls);
