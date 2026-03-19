@@ -464,24 +464,6 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
             }
         }
         collectUrlsDeep(data?.citations, urls);
-        
-        // Diagnostic: log what we found in the raw response structure
-        if (urls.length === 0 && Array.isArray(data?.output)) {
-            const outputSummary = data.output.map(item => {
-                const summary = { type: item.type, status: item.status };
-                if (item.type === 'message' && Array.isArray(item.content)) {
-                    summary.content_parts = item.content.map(p => ({
-                        type: p.type,
-                        has_annotations: !!(p.annotations && p.annotations.length),
-                        annotation_count: (p.annotations || []).length,
-                        text_len: (p.text || '').length,
-                    }));
-                }
-                return summary;
-            });
-            console.log(`[DIAG] Responses API 0 toolUrls - output structure: ${JSON.stringify(outputSummary).slice(0, 800)}`);
-        }
-        
         return [...new Set(urls)];
     }
     // Anthropic: web_search_tool_result blocks
