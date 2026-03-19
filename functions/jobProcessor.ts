@@ -122,11 +122,18 @@ function parseKimiToolCallsFromText(text) {
 }
 
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
-const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini']);
-const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano']);
+// Pattern-based: automatically covers gpt-5, gpt-5.x, gpt-6, and future models.
+const OPENAI_RESPONSES_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
+const OPENAI_WEBSEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
 
-function isOpenAIResponsesModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_RESPONSES_MODELS.has(id)||[...OPENAI_RESPONSES_MODELS].some(a=>id.startsWith(a+'-')); }
-function isOpenAIWebSearchModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_WEBSEARCH_MODELS.has(id)||[...OPENAI_WEBSEARCH_MODELS].some(a=>id.startsWith(a+'-')); }
+function isOpenAIResponsesModel(modelId) {
+    const id = (modelId || '').toLowerCase();
+    return OPENAI_RESPONSES_PREFIXES.some(p => id === p || id.startsWith(p + '-') || id.startsWith(p + '.') || id.startsWith(p + ' '));
+}
+function isOpenAIWebSearchModel(modelId) {
+    const id = (modelId || '').toLowerCase();
+    return OPENAI_WEBSEARCH_PREFIXES.some(p => id === p || id.startsWith(p + '-') || id.startsWith(p + '.') || id.startsWith(p + ' '));
+}
 
 // ── ENCRYPTION ──────────────────────────────────────────────
 
