@@ -71,7 +71,8 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
         try {
             await base44.functions.invoke('jobProcessor', { action: 'resume', job_id: jobId });
             await loadJobStatus();
-            toast.success('Task resumed — server will continue processing shortly');
+            onStatusChange?.();
+            toast.success('Task resumed — processing will start shortly');
         } catch {
             toast.error('Failed to resume processing');
         } finally {
