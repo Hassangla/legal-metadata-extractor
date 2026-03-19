@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign } from 'lucide-react';
+import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 import ConnectionManager from '@/components/connections/ConnectionManager';
@@ -26,6 +26,7 @@ export default function Settings() {
     const [editingId, setEditingId] = useState(null);
     const [editEconomy, setEditEconomy] = useState('');
     const [editCode, setEditCode] = useState('');
+    const [refreshingModels, setRefreshingModels] = useState(false);
 
     useEffect(() => {
         base44.auth.me().then(u => setUser(u)).catch(() => {});
@@ -134,6 +135,26 @@ export default function Settings() {
         }
     };
 
+    const handleRefreshAllModels = async () => {
+        setRefreshingModels(true);
+        try {
+            const resp = await base44.functions.invoke('apiConnections', { action: 'refreshAllModels' });
+            const results = resp.data?.results || [];
+            const succeeded = results.filter(r => r.success);
+            const failed = results.filter(r => !r.success);
+            const totalModels = succeeded.reduce((sum, r) => sum + (r.model_count || 0), 0);
+            if (failed.length > 0) {
+                toast.warning(`Refreshed ${succeeded.length}/${results.length} connections (${totalModels} models). ${failed.length} failed.`);
+            } else {
+                toast.success(`Refreshed all ${results.length} connections — ${totalModels} models updated`);
+            }
+        } catch (error) {
+            toast.error('Failed to refresh models');
+        } finally {
+            setRefreshingModels(false);
+        }
+    };
+
     const handleDelete = async (id) => {
         if (!confirm('Delete this economy code?')) return;
         try {
@@ -195,6 +216,21 @@ export default function Settings() {
                         <TabsContent value="connections">
                             <Card>
                                 <CardContent className="pt-6">
+                                    <div className="flex items-center justify-between mb-6">
+                                        <div>
+                                            <h3 className="text-lg font-semibold text-slate-900">API Connections</h3>
+                                            <p className="text-sm text-slate-500">Manage your AI provider connections</p>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            onClick={handleRefreshAllModels}
+                                            disabled={refreshingModels}
+                                            className="gap-2"
+                                        >
+                                            {refreshingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                            {refreshingModels ? 'Refreshing...' : 'Refresh All Models'}
+                                        </Button>
+                                    </div>
                                     <ConnectionManager />
                                 </CardContent>
                             </Card>

@@ -254,21 +254,14 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
-    // OpenAI direct: strict allowlist for web search models
-    // Only models verified to work with Responses API web_search tool
-    const OPENAI_WEBSEARCH_ALLOWLIST = new Set([
-        'gpt-4o', 'gpt-4o-mini', 'gpt-4o-search-preview',
-        'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
-    ]);
     if (providerKey === 'openai') {
-        // Check exact match first, then prefix match
-        if (OPENAI_WEBSEARCH_ALLOWLIST.has(id)) {
+        // Pattern-based: automatically covers gpt-5.x, gpt-6, and future models.
+        const WEB_SEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
+        const matches = WEB_SEARCH_PREFIXES.some(prefix =>
+            id === prefix || id.startsWith(prefix + '-') || id.startsWith(prefix + '.') || id.startsWith(prefix + ' ')
+        );
+        if (matches || id.includes('search-preview') || id.includes('search-api')) {
             return { supports: true, options: ['web_search_preview'] };
-        }
-        for (const allowed of OPENAI_WEBSEARCH_ALLOWLIST) {
-            if (id.startsWith(allowed + '-')) {
-                return { supports: true, options: ['web_search_preview'] };
-            }
         }
         return { supports: false, options: [] };
     }
@@ -309,6 +302,16 @@ const STATIC_PRICING = {
     'gpt-4.1-mini':        { input: 0.40,  output: 1.60 },
     'gpt-4.1-nano':        { input: 0.10,  output: 0.40 },
     'gpt-4.5-preview':     { input: 75.00, output: 150.00 },
+    'gpt-5':               { input: 2.00,  output: 8.00 },
+    'gpt-5-mini':          { input: 0.40,  output: 1.60 },
+    'gpt-5-nano':          { input: 0.10,  output: 0.40 },
+    'gpt-5.1':             { input: 2.00,  output: 8.00 },
+    'gpt-5.2':             { input: 2.00,  output: 8.00 },
+    'gpt-5.2-pro':         { input: 15.00, output: 60.00 },
+    'gpt-5.4':             { input: 2.00,  output: 8.00 },
+    'gpt-5.4-mini':        { input: 0.40,  output: 1.60 },
+    'gpt-5.4-nano':        { input: 0.10,  output: 0.40 },
+    'gpt-5.4-pro':         { input: 15.00, output: 60.00 },
     'gpt-3.5-turbo':       { input: 0.50,  output: 1.50 },
     'chatgpt-4o-latest':   { input: 5.00,  output: 15.00 },
     'o1':                  { input: 15.00, output: 60.00 },
