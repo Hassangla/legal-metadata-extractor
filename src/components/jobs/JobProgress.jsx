@@ -83,7 +83,7 @@ export default function JobProgress({ jobId, onComplete }) {
         setStopping(true);
         try {
             await base44.functions.invoke('jobProcessor', { action: 'stop', job_id: jobId });
-            toast.success('Task stopped');
+            toast.success('Task aborted');
             await loadJobStatus();
         } catch {
             toast.error('Failed to stop task');
