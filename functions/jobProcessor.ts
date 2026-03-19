@@ -463,10 +463,6 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
                 }
             }
         }
-        // Also check output_text at top level (sometimes present)
-        if (data?.output_text && typeof data.output_text === 'string') {
-            for (const u of extractUrlsFromText(data.output_text)) urls.push(u);
-        }
         collectUrlsDeep(data?.citations, urls);
         
         // Diagnostic: log what we found in the raw response structure
