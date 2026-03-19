@@ -1167,6 +1167,12 @@ Deno.serve(async (req) => {
                     }
                 }
 
+                // Best-effort kickoff: try to start processing immediately
+                // so jobs don't wait for the next scheduler tick.
+                try {
+                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                } catch (_) { /* non-fatal — scheduler will pick it up */ }
+
                 return Response.json({ job });
             }
 
