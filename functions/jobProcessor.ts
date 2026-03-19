@@ -1954,6 +1954,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 if (!actualPending.length) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const rp = resumeJob.progress_json || {};
                 const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', cancelled_at: '', progress_json: { ...rp, pending: actualPending.length, processing: 0 } }));
+
+                // Best-effort kickoff after resume
+                try {
+                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                } catch (_) { /* non-fatal */ }
+
                 return Response.json({ job: updatedResumeJob });
             }
 
