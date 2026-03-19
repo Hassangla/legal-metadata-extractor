@@ -697,7 +697,9 @@ Deno.serve(async (req) => {
             case 'refreshAllModels': {
                 const allConnections = await base44.entities.APIConnection.list();
                 const results = [];
-                for (const conn of allConnections) {
+                for (let ci = 0; ci < allConnections.length; ci++) {
+                    const conn = allConnections[ci];
+                    if (ci > 0) await new Promise(r => setTimeout(r, 2000));
                     try {
                         const apiKey = await decryptString(conn.api_key_encrypted);
                         const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
@@ -740,12 +742,13 @@ Deno.serve(async (req) => {
                     if (m.pricing_source === 'manual') continue;
                     const price = lookupStaticPricing(mid);
                     if (price && (m.input_price_per_million !== price.input || m.output_price_per_million !== price.output)) {
-                        await base44.entities.ModelCatalog.update(m.id, {
+                        await safeEntityOp(() => base44.entities.ModelCatalog.update(m.id, {
                             input_price_per_million: price.input,
                             output_price_per_million: price.output,
                             pricing_source: 'static',
-                        });
+                        }));
                         pricingUpdated++;
+                        if (pricingUpdated % 5 === 0) await new Promise(r => setTimeout(r, 800));
                     }
                 }
                 return Response.json({ success: true, updated: pricingUpdated, total: pricingModels.length });
