@@ -1162,21 +1162,14 @@ Deno.serve(async (req) => {
 
             case 'process': {
                 const { job_id } = params;
+                const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
+                const isJobActive = async () => { const j = (await withEntityRetry(() => base44.entities.Job.filter({ id: job_id })))[0]; return j && !TERMINAL_STATUSES.has(j.status) && j.status !== 'paused'; };
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
-
                 const job = jobs[0];
-                if (job.status === 'done') {
-                    return Response.json({ job, message: 'Job already completed' });
-                }
-                if (job.status === 'paused') {
-                    return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
-                }
-
-                // Wrap entire processing in try-catch so fatal errors set job to 'error'
-                // instead of leaving it stuck in 'running'.
+                if (TERMINAL_STATUSES.has(job.status)) return Response.json({ job, message: `Job already ${job.status}` });
+                if (job.status === 'paused') return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
                 try {
-
                 await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running' }));
 
                 const connections = await withEntityRetry(() => base44.entities.APIConnection.filter({ id: job.connection_id }));
@@ -1250,6 +1243,9 @@ Deno.serve(async (req) => {
 
                 for (const row of pendingRows) {
                     if (processedCount > 0) await interRowDelay();
+                    if (!(await isJobActive())) { console.log(`[process] Job ${job_id} no longer active — exiting.`); break; }
+                    const freshRow = (await withEntityRetry(() => base44.entities.JobRow.filter({ id: row.id })))[0];
+                    if (freshRow?.status === 'cancelled' || freshRow?.status === 'done') continue;
                     try {
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
@@ -1742,22 +1738,19 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     }
                 }
 
-                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
+                // Re-fetch before final update to avoid overwriting cancelled/paused
+                const fj = (await withEntityRetry(() => base44.entities.Job.filter({ id: job_id })))[0];
+                if (fj && (TERMINAL_STATUSES.has(fj.status) || fj.status === 'paused')) {
+                    return Response.json({ job: fj, processed_this_batch: processedCount, remaining: 0 });
+                }
+                const newProcessedRows = Math.min((fj?.processed_rows || job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
                 const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
                 const newStatus = pendingLeft <= 0 ? 'done' : 'running';
-                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
-                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
-                const updatePayload = {
-                    processed_rows: newProcessedRows,
-                    status: newStatus,
-                    progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount },
-                    total_input_tokens: totalInputTokens,
-                    total_output_tokens: totalOutputTokens,
-                };
+                const totalInputTokens = (fj?.total_input_tokens || job.total_input_tokens || 0) + batchInputTokens;
+                const totalOutputTokens = (fj?.total_output_tokens || job.total_output_tokens || 0) + batchOutputTokens;
+                const updatePayload = { processed_rows: newProcessedRows, status: newStatus, progress_json: { ...(fj?.progress_json || job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount }, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens };
                 if (totalInputTokens > 0 || totalOutputTokens > 0) {
-                    updatePayload.estimated_cost_usd = modelInputPrice > 0
-                        ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens)
-                        : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                    updatePayload.estimated_cost_usd = modelInputPrice > 0 ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens) : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
                 }
                 const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
                 return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
@@ -1766,11 +1759,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
                     const retryable = isRateLimitError(fatalErr);
                     try {
-                        if (retryable) {
-                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` }));
-                        } else {
-                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) }));
-                        }
+                        const fck = (await base44.entities.Job.filter({ id: job_id }))[0];
+                        if (fck && (fck.status === 'cancelled' || fck.status === 'paused')) { /* respect user action */ }
+                        else if (retryable) { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` })); }
+                        else { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) })); }
                     } catch (_) {}
                     return Response.json({ error: fatalMsg, retryable }, { status: retryable ? 429 : 500 });
                 }
@@ -1790,9 +1782,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0)),
                 ]);
                 const p = pendingRows.length, er = errorRows.length;
-                // If job is done, treat any stuck 'processing' rows as done
-                const pr = (job.status === 'done' || job.status === 'paused') ? 0 : processingRows.length;
-                const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
+                const cancelledRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'cancelled' }, 'row_index', 5000, 0));
+                const cn = cancelledRows.length;
+                const pr = (job.status === 'done' || job.status === 'paused' || job.status === 'cancelled') ? 0 : processingRows.length;
+                const statusCounts = { pending: p, processing: pr, error: er, cancelled: cn, done: Math.max(0, (job.total_rows || 0) - p - pr - er - cn) };
                 return Response.json({ job, statusCounts });
             }
 
@@ -1913,19 +1906,20 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const stopJobs = await base44.entities.Job.filter({ id: job_id });
                 if (!stopJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 const stopJob = stopJobs[0];
-                if (stopJob.status !== 'running' && stopJob.status !== 'queued') return Response.json({ error: 'Job is not running' }, { status: 400 });
+                if (stopJob.status === 'cancelled') return Response.json({ success: true, stopped: 0 });
+                if (stopJob.status !== 'running' && stopJob.status !== 'queued') return Response.json({ error: 'Job is not active' }, { status: 400 });
+                // Set cancelled FIRST so concurrent processor sees it immediately
+                const cancelledAt = new Date().toISOString();
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'cancelled', error_message: `Cancelled by user at ${cancelledAt}`, cancelled_at: cancelledAt }));
                 const [rowsToStop, processingRows2] = await Promise.all([
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)),
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
                 ]);
                 let stopped = 0;
                 for (const row of [...rowsToStop, ...processingRows2]) {
-                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Aborted by user' }));
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'cancelled', error_message: 'Cancelled by user' }));
                     stopped++;
                 }
-                const stopInTok = stopJob.total_input_tokens || 0;
-                const stopOutTok = stopJob.total_output_tokens || 0;
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: `Aborted by user. ${stopped} rows skipped.`, total_input_tokens: stopInTok, total_output_tokens: stopOutTok, estimated_cost_usd: stopJob.estimated_cost_usd || estimateCostFromTable(stopJob.model_id, stopInTok, stopOutTok) }));
                 return Response.json({ success: true, stopped });
             }
 
@@ -1935,11 +1929,15 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 if (!resumeJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 const resumeJob = resumeJobs[0];
                 if (resumeJob.status === 'done') return Response.json({ error: 'Job is already completed' }, { status: 400 });
+                // For cancelled jobs, re-mark cancelled rows as pending
+                if (resumeJob.status === 'cancelled') {
+                    const cRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'cancelled' }, 'row_index', 5000, 0, ['id']));
+                    for (const r of cRows) await withEntityRetry(() => base44.entities.JobRow.update(r.id, { status: 'pending', error_message: '' }));
+                }
+                const actualPending = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0, ['id']));
+                if (!actualPending.length) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const rp = resumeJob.progress_json || {};
-                const rDone = Number(rp.done || 0), rErr = Number(rp.error || 0), rProc = Number(rp.processing || 0);
-                const rPending = typeof rp.pending === 'number' ? rp.pending : Math.max((resumeJob.total_rows || 0) - rDone - rErr - rProc, 0);
-                if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
-                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
+                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', cancelled_at: '', progress_json: { ...rp, pending: actualPending.length, processing: 0 } }));
                 return Response.json({ job: updatedResumeJob });
             }
 
