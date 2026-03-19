@@ -223,7 +223,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         // Path B: Allowlisted models → Responses API + web_search tool
         // Strict gate: only use Responses API for verified models
         if (cfg.responsesUrl && isOpenAIWebSearchModel(modelId)) {
-            const isOSeries = /^(o1|o3|o4)/.test(id);
+            const isReasoningModel = /^(o1|o3|o4|gpt-5)/.test(id);
             const body = {
                 model: modelId,
                 instructions: systemPrompt,
@@ -232,7 +232,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
                 max_output_tokens: 16384,
                 store: false,
             };
-            if (!isOSeries) { body.temperature = 0; }
+            if (!isReasoningModel) { body.temperature = 0; }
             return {
                 url: cfg.responsesUrl(baseUrl),
                 init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
