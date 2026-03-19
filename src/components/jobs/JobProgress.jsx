@@ -79,7 +79,7 @@ export default function JobProgress({ jobId, onComplete }) {
     };
 
     const handleStop = async () => {
-        if (!confirm('Stop this task? All pending rows will be marked as errors and the job will be marked done.')) return;
+        if (!confirm('Abort this task? All pending and in-progress rows will be cancelled and the job will be marked as aborted.')) return;
         setStopping(true);
         try {
             await base44.functions.invoke('jobProcessor', { action: 'stop', job_id: jobId });
