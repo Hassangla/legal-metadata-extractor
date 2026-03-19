@@ -826,13 +826,14 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
     const existingMap = {};
     for (const em of existingModels) { existingMap[em.model_id] = em; }
 
+    let opCount = 0;
     for (const m of models) {
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
         const existing = existingMap[m.id];
         const pricing = lookupStaticPricing(m.id);
 
         if (!existing) {
-            await base44.entities.ModelCatalog.create({
+            await safeEntityOp(() => base44.entities.ModelCatalog.create({
                 connection_id: connectionId,
                 model_id: m.id,
                 display_name: m.name,
@@ -842,7 +843,7 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 input_price_per_million: pricing?.input || 0,
                 output_price_per_million: pricing?.output || 0,
                 pricing_source: pricing ? 'static' : '',
-            });
+            }));
         } else {
             const update = { display_name: m.name, last_checked_at: now };
             if (ws.supports !== null) {
@@ -854,9 +855,11 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
                 update.output_price_per_million = pricing.output;
                 update.pricing_source = 'static';
             }
-            await base44.entities.ModelCatalog.update(existing.id, update);
+            await safeEntityOp(() => base44.entities.ModelCatalog.update(existing.id, update));
         }
+        opCount++;
+        if (opCount % 5 === 0) await sleep(800);
     }
 
-    return await base44.entities.ModelCatalog.filter({ connection_id: connectionId });
+    return await safeEntityOp(() => base44.entities.ModelCatalog.filter({ connection_id: connectionId }));
 }
