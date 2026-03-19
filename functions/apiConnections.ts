@@ -788,6 +788,18 @@ Deno.serve(async (req) => {
     }
 });
 
+// ── SHARED: Rate-limit-safe entity operation ────────────────
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+async function safeEntityOp(fn, maxRetries = 4) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try { return await fn(); } catch (e) {
+            const is429 = /rate.?limit|429/i.test(e?.message || '');
+            if (!is429 || attempt === maxRetries) throw e;
+            await sleep(1500 * Math.pow(2, attempt) + Math.random() * 500);
+        }
+    }
+}
+
 // ── SHARED: Fetch models and store in ModelCatalog ──────────
 
 async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, providerKey) {
