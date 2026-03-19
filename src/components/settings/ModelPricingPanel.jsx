@@ -38,7 +38,7 @@ export default function ModelPricingPanel() {
                 action: 'fetchPricing',
             });
             const r = resp.data;
-            toast.success(`Updated ${r.updated} of ${r.total} models (${r.live_pricing_models} live prices found)`);
+            toast.success(`Updated ${r.updated} of ${r.total} models`);
             await loadPricing();
         } catch (e) {
             toast.error('Failed to fetch pricing');
