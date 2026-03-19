@@ -78,6 +78,20 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     };
 
+    const handleStop = async () => {
+        if (!confirm('Stop this task? All pending rows will be marked as errors and the job will be marked done.')) return;
+        setStopping(true);
+        try {
+            await base44.functions.invoke('jobProcessor', { action: 'stop', job_id: jobId });
+            toast.success('Task stopped');
+            await loadJobStatus();
+        } catch {
+            toast.error('Failed to stop task');
+        } finally {
+            setStopping(false);
+        }
+    };
+
     const handlePause = async () => {
         setPausing(true);
         try {
