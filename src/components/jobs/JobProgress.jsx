@@ -23,6 +23,7 @@ export default function JobProgress({ jobId, onComplete }) {
     const [resuming, setResuming] = useState(false);
     const [generating, setGenerating] = useState(false);
     const [pausing, setPausing] = useState(false);
+    const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
     const jobIdRef = useRef(jobId);
 
