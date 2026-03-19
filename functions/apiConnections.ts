@@ -695,21 +695,10 @@ Deno.serve(async (req) => {
             }
 
             case 'refreshAllModels': {
+                // Returns connection list; frontend refreshes one at a time via fetchModels
                 const allConnections = await base44.entities.APIConnection.list();
-                const results = [];
-                for (let ci = 0; ci < allConnections.length; ci++) {
-                    const conn = allConnections[ci];
-                    if (ci > 0) await new Promise(r => setTimeout(r, 2000));
-                    try {
-                        const apiKey = await decryptString(conn.api_key_encrypted);
-                        const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
-                        const models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
-                        results.push({ id: conn.id, name: conn.name, success: true, model_count: models.length });
-                    } catch (e) {
-                        results.push({ id: conn.id, name: conn.name, success: false, error: e.message });
-                    }
-                }
-                return Response.json({ results });
+                const connList = allConnections.map(c => ({ id: c.id, name: c.name }));
+                return Response.json({ connections: connList });
             }
 
             case 'getProviders': {
