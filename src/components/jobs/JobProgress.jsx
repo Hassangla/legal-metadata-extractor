@@ -246,6 +246,12 @@ export default function JobProgress({ jobId, onComplete }) {
                         Pause
                     </Button>
                 )}
+                {isActive && (
+                    <Button variant="outline" size="sm" onClick={handleStop} disabled={stopping} className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50">
+                        {stopping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
+                        Stop
+                    </Button>
+                )}
                 {canResume && (
                     <Button size="sm" onClick={handleResume} disabled={resuming} className="gap-1.5 bg-slate-900 hover:bg-slate-800 flex-1">
                         {resuming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
