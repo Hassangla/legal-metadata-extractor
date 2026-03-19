@@ -1,95 +1,155 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
-// Maximum wall-clock milliseconds to spend in one automation invocation.
-// Base44 automation functions have a ~25s CPU limit; we stop at 200s wall-clock
-// to leave plenty of headroom for the final DB writes.
-const MAX_WALL_MS = 200_000;
-const BATCH_INTER_DELAY_MS = 1_500; // small pause between batches
+// Base44 functions have a ~25s CPU limit. Keep wall-clock well under that.
+// We process ONE batch per invocation and exit. The scheduler calls us every 5 min.
+const MAX_WALL_MS = 18_000; // 18 seconds — safe margin
+const LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes — matches scheduler interval
+const STALE_RUNNING_MS = 10 * 60 * 1000; // 10 minutes — recover stuck "running" jobs
+const STALE_QUEUED_MS = 15 * 60 * 1000; // 15 minutes — recover orphaned "queued" jobs
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 Deno.serve(async (req) => {
+    const startTime = Date.now();
+
     try {
         const base44 = createClientFromRequest(req);
-
-        // This function is called by the automation scheduler (no user session).
-        // Use service role for all DB access.
         const sr = base44.asServiceRole;
 
-        const startTime = Date.now();
-
-        // Find the oldest queued or running job.
-        // We process one job per invocation to keep things simple and predictable.
-        const [queuedJobs, runningJobs] = await Promise.all([
-            sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
-            sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
-        ]);
-
-        // Prefer queued over running; among running, take the least-recently-updated one.
-        const job = queuedJobs[0] || runningJobs[0];
-
-        if (!job) {
-            return Response.json({ message: 'No queued or running jobs found.' });
+        // ── STEP 0: Recover stale jobs ──
+        // Jobs stuck in "running" with no progress for STALE_RUNNING_MS get requeued.
+        // Jobs stuck in "queued" with expired locks get their locks cleared.
+        try {
+            const runningJobs = await sr.entities.Job.filter({ status: 'running' }, 'updated_date', 10);
+            const now = new Date();
+            for (const rj of runningJobs) {
+                const updatedAt = new Date(rj.updated_date);
+                const staleDuration = now.getTime() - updatedAt.getTime();
+                if (staleDuration > STALE_RUNNING_MS) {
+                    console.log(`[processQueuedJobs] Recovering stale running job ${rj.id} (stale ${Math.round(staleDuration / 1000)}s)`);
+                    await sr.entities.Job.update(rj.id, {
+                        status: 'queued',
+                        processing_lock_token: null,
+                        processing_lock_expires_at: null,
+                        error_message: `Auto-requeued: no progress for ${Math.round(staleDuration / 60000)} min`,
+                    });
+                }
+            }
+        } catch (recoveryErr) {
+            console.error('[processQueuedJobs] Recovery check error (non-fatal):', recoveryErr.message);
         }
 
-        const job_id = job.id;
-        console.log(`[processQueuedJobs] Picked up job ${job_id} (status=${job.status})`);
+        // ── STEP 1: Find a queued job to process ──
+        const queuedJobs = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 5);
+        
+        if (!queuedJobs.length) {
+            return Response.json({ message: 'No queued jobs found.' });
+        }
 
-        // Delegate all processing to the existing jobProcessor `process` action.
-        // We call it repeatedly until the job is done or we're close to the time limit.
+        // Try to claim a job with atomic lock
+        let claimedJob = null;
+        const lockToken = crypto.randomUUID();
+        const lockExpires = new Date(Date.now() + LOCK_DURATION_MS).toISOString();
+
+        for (const candidate of queuedJobs) {
+            // Skip if another worker has a valid lock
+            if (candidate.processing_lock_token && candidate.processing_lock_expires_at) {
+                const lockExp = new Date(candidate.processing_lock_expires_at);
+                if (lockExp > new Date()) {
+                    console.log(`[processQueuedJobs] Job ${candidate.id} already locked until ${candidate.processing_lock_expires_at} — skipping.`);
+                    continue;
+                }
+                // Lock expired — we can claim it
+                console.log(`[processQueuedJobs] Job ${candidate.id} has expired lock — reclaiming.`);
+            }
+
+            // Attempt to claim by writing our lock token
+            try {
+                await sr.entities.Job.update(candidate.id, {
+                    processing_lock_token: lockToken,
+                    processing_lock_expires_at: lockExpires,
+                });
+
+                // Re-read to verify we got the lock (optimistic concurrency)
+                const [verified] = await sr.entities.Job.filter({ id: candidate.id });
+                if (verified?.processing_lock_token === lockToken && verified?.status === 'queued') {
+                    claimedJob = verified;
+                    console.log(`[processQueuedJobs] Claimed job ${candidate.id} with lock ${lockToken}`);
+                    break;
+                } else {
+                    console.log(`[processQueuedJobs] Lost claim race for job ${candidate.id} — trying next.`);
+                }
+            } catch (claimErr) {
+                console.error(`[processQueuedJobs] Failed to claim job ${candidate.id}:`, claimErr.message);
+            }
+        }
+
+        if (!claimedJob) {
+            return Response.json({ message: 'No claimable queued jobs (all locked by other workers).' });
+        }
+
+        const job_id = claimedJob.id;
+
+        // ── STEP 2: Process batches within time limit ──
         let batchesRun = 0;
         let lastResult = null;
 
         while (Date.now() - startTime < MAX_WALL_MS) {
-            // Re-fetch the job to get the latest status before each batch.
-            const freshJobs = await sr.entities.Job.filter({ id: job_id });
-            if (!freshJobs.length) {
+            // Re-fetch job to check for external status changes (pause/cancel)
+            const [freshJob] = await sr.entities.Job.filter({ id: job_id });
+            if (!freshJob) {
                 console.log(`[processQueuedJobs] Job ${job_id} disappeared — stopping.`);
                 break;
             }
-            const freshJob = freshJobs[0];
 
-            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'cancelled' || freshJob.status === 'paused') {
-                console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
+            if (['done', 'error', 'cancelled', 'paused'].includes(freshJob.status)) {
+                console.log(`[processQueuedJobs] Job ${job_id} is now ${freshJob.status} — stopping.`);
                 lastResult = { status: freshJob.status };
                 break;
             }
 
-            // Check if there are any pending rows left.
+            // Check if there are any pending rows
             const pendingRows = await sr.entities.JobRow.filter(
-                { job_id, status: 'pending' },
-                'row_index',
-                1,
-                0
+                { job_id, status: 'pending' }, 'row_index', 1, 0
             );
             if (!pendingRows.length) {
-                // No pending rows — mark done.
-                await sr.entities.Job.update(job_id, {
-                    status: 'done',
-                    processed_rows: freshJob.total_rows || freshJob.processed_rows,
-                });
-                console.log(`[processQueuedJobs] Job ${job_id} — no pending rows, marked done.`);
-                lastResult = { status: 'done' };
+                // Check if any rows are still "processing" — don't mark done prematurely
+                const processingRows = await sr.entities.JobRow.filter(
+                    { job_id, status: 'processing' }, 'row_index', 1, 0
+                );
+                if (processingRows.length === 0) {
+                    await sr.entities.Job.update(job_id, {
+                        status: 'done',
+                        processed_rows: freshJob.total_rows || freshJob.processed_rows,
+                        processing_lock_token: null,
+                        processing_lock_expires_at: null,
+                    });
+                    console.log(`[processQueuedJobs] Job ${job_id} — no pending/processing rows, marked done.`);
+                    lastResult = { status: 'done' };
+                } else {
+                    console.log(`[processQueuedJobs] Job ${job_id} — ${processingRows.length} rows still processing, not marking done yet.`);
+                    lastResult = { status: 'waiting_for_processing_rows' };
+                }
                 break;
             }
 
-            // Invoke the existing `process` action via the SDK so all the complex
-            // extraction / verification / pricing logic stays in one place.
+            // Invoke jobProcessor.process using service role
             let batchResp;
             try {
                 batchResp = await sr.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id,
+                    _service_call: true, // signals this is an internal service-role call
                 });
             } catch (invokeErr) {
                 console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, invokeErr.message);
-                // If the jobProcessor itself set the job to error, we respect that and stop.
-                const afterErr = await sr.entities.Job.filter({ id: job_id });
-                if (afterErr[0]?.status === 'error') {
+                const [afterErr] = await sr.entities.Job.filter({ id: job_id });
+                if (afterErr?.status === 'error') {
                     lastResult = { status: 'error', error: invokeErr.message };
                     break;
                 }
-                // Transient error — wait a bit and try again next automation tick
+                // Transient error — stop this invocation, next scheduler tick will retry
+                lastResult = { error: invokeErr.message };
                 break;
             }
 
@@ -100,17 +160,28 @@ Deno.serve(async (req) => {
             console.log(`[processQueuedJobs] Batch ${batchesRun} done. remaining=${remaining}`);
 
             if (remaining === 0 || remaining === undefined) {
-                // jobProcessor already set status to 'done' — we're finished.
                 break;
             }
 
-            // Small inter-batch pause to avoid hammering the provider.
-            if (Date.now() - startTime + BATCH_INTER_DELAY_MS < MAX_WALL_MS) {
-                await sleep(BATCH_INTER_DELAY_MS);
-            } else {
-                break; // approaching time limit
+            // Check time before another batch
+            if (Date.now() - startTime + 2000 >= MAX_WALL_MS) {
+                console.log(`[processQueuedJobs] Approaching time limit — exiting loop.`);
+                break;
             }
+
+            await sleep(500);
         }
+
+        // ── STEP 3: Release lock ──
+        try {
+            const [finalJob] = await sr.entities.Job.filter({ id: job_id });
+            if (finalJob?.processing_lock_token === lockToken) {
+                await sr.entities.Job.update(job_id, {
+                    processing_lock_token: null,
+                    processing_lock_expires_at: null,
+                });
+            }
+        } catch (_) { /* non-fatal */ }
 
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
