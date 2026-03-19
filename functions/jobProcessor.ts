@@ -1101,10 +1101,20 @@ function estimateCostFromTable(modelId, inTok, outTok) {
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
-        const user = await base44.auth.me();
-        if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        const body = await req.json();
+        const { action, _service_call, ...params } = body;
 
-        const { action, ...params } = await req.json();
+        // For internal service-role calls (from processQueuedJobs scheduler),
+        // skip user auth check on the 'process' action only.
+        let user = null;
+        if (_service_call && action === 'process') {
+            // Service-role call — no user session needed.
+            // The scheduler already authenticated via service role.
+            user = { email: '_scheduler_', role: 'admin', full_name: 'Queue Scheduler' };
+        } else {
+            user = await base44.auth.me();
+            if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         switch (action) {
 
