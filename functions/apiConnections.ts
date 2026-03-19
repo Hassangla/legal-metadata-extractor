@@ -679,11 +679,11 @@ Deno.serve(async (req) => {
                     const now = new Date().toISOString();
                     for (const m of toUpdate.slice(0, 10)) {
                         try {
-                            await base44.entities.ModelCatalog.update(m.id, {
+                            await safeEntityOp(() => base44.entities.ModelCatalog.update(m.id, {
                                 supports_web_search: m.supports_web_search,
                                 web_search_options: m.web_search_options,
                                 last_checked_at: now,
-                            });
+                            }));
                         } catch (_) {}
                     }
                 }
