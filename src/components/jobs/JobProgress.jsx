@@ -101,6 +101,7 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
             await base44.functions.invoke('jobProcessor', { action: 'pause', job_id: jobId });
             toast.success('Task paused');
             await loadJobStatus();
+            onStatusChange?.();
         } catch {
             toast.error('Failed to pause task');
         } finally {
