@@ -133,14 +133,13 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke jobProcessor.process
-            // Use base44 (not sr) so the request token is forwarded correctly
+            // Invoke jobProcessor.process using service role
             let batchResp;
             try {
-                batchResp = await base44.functions.invoke('jobProcessor', {
+                batchResp = await sr.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id,
-                    _service_call: true, // signals this is an internal service-role call
+                    _service_call: true,
                 });
             } catch (invokeErr) {
                 console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, invokeErr.message);
