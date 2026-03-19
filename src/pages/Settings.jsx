@@ -138,8 +138,17 @@ export default function Settings() {
     const handleRefreshAllModels = async () => {
         setRefreshingModels(true);
         try {
-            const resp = await base44.functions.invoke('apiConnections', { action: 'refreshAllModels' });
-            const results = resp.data?.results || [];
+            const listResp = await base44.functions.invoke('apiConnections', { action: 'refreshAllModels' });
+            const connections = listResp.data?.connections || [];
+            const results = [];
+            for (const conn of connections) {
+                try {
+                    const r = await base44.functions.invoke('apiConnections', { action: 'fetchModels', connection_id: conn.id });
+                    results.push({ name: conn.name, success: true, model_count: r.data?.models?.length || 0 });
+                } catch (e) {
+                    results.push({ name: conn.name, success: false });
+                }
+            }
             const succeeded = results.filter(r => r.success);
             const failed = results.filter(r => !r.success);
             const totalModels = succeeded.reduce((sum, r) => sum + (r.model_count || 0), 0);
