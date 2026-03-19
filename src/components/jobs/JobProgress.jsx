@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { 
     Play, Pause, Download, RefreshCw, Loader2, CheckCircle2, 
-    XCircle, AlertCircle, Clock, Server, FileText, Cpu, DollarSign
+    XCircle, AlertCircle, Clock, Server, FileText, Cpu, DollarSign, Square
 } from 'lucide-react';
 import { toast } from 'sonner';
 
