@@ -1880,6 +1880,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     await sleep(200);
                 }
 
+                // Best-effort kickoff after rerun
+                try {
+                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                } catch (_) { /* non-fatal */ }
+
                 return Response.json({ job: newJob });
             }
 
