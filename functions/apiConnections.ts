@@ -829,39 +829,55 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
     const existingMap = {};
     for (const em of existingModels) { existingMap[em.model_id] = em; }
 
-    let opCount = 0;
+    // Batch new models for bulkCreate; only update existing models if data changed
+    const newModels = [];
+    const updatesNeeded = [];
+
     for (const m of models) {
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
         const existing = existingMap[m.id];
         const pricing = lookupStaticPricing(m.id);
 
         if (!existing) {
-            await safeEntityOp(() => base44.entities.ModelCatalog.create({
-                connection_id: connectionId,
-                model_id: m.id,
-                display_name: m.name,
-                supports_web_search: ws.supports,
-                web_search_options: ws.options,
+            newModels.push({
+                connection_id: connectionId, model_id: m.id, display_name: m.name,
+                supports_web_search: ws.supports, web_search_options: ws.options,
                 last_checked_at: now,
                 input_price_per_million: pricing?.input || 0,
                 output_price_per_million: pricing?.output || 0,
                 pricing_source: pricing ? 'static' : '',
-            }));
+            });
         } else {
-            const update = { display_name: m.name, last_checked_at: now };
-            if (ws.supports !== null) {
+            const update = {};
+            if (existing.display_name !== m.name) update.display_name = m.name;
+            if (ws.supports !== null && existing.supports_web_search !== ws.supports) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
             }
             if ((!existing.input_price_per_million || existing.pricing_source !== 'manual') && pricing) {
-                update.input_price_per_million = pricing.input;
-                update.output_price_per_million = pricing.output;
-                update.pricing_source = 'static';
+                if (existing.input_price_per_million !== pricing.input || existing.output_price_per_million !== pricing.output) {
+                    update.input_price_per_million = pricing.input;
+                    update.output_price_per_million = pricing.output;
+                    update.pricing_source = 'static';
+                }
             }
-            await safeEntityOp(() => base44.entities.ModelCatalog.update(existing.id, update));
+            if (Object.keys(update).length > 0) {
+                update.last_checked_at = now;
+                updatesNeeded.push({ id: existing.id, update });
+            }
         }
-        opCount++;
-        if (opCount % 5 === 0) await sleep(800);
+    }
+
+    // BulkCreate new models in chunks of 25
+    for (let i = 0; i < newModels.length; i += 25) {
+        await safeEntityOp(() => base44.entities.ModelCatalog.bulkCreate(newModels.slice(i, i + 25)));
+        if (i + 25 < newModels.length) await sleep(600);
+    }
+
+    // Update only changed models with throttling
+    for (let i = 0; i < updatesNeeded.length; i++) {
+        await safeEntityOp(() => base44.entities.ModelCatalog.update(updatesNeeded[i].id, updatesNeeded[i].update));
+        if ((i + 1) % 5 === 0) await sleep(600);
     }
 
     return await safeEntityOp(() => base44.entities.ModelCatalog.filter({ connection_id: connectionId }));
