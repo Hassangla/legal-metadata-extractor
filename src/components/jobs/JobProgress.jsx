@@ -9,14 +9,15 @@ import {
 import { toast } from 'sonner';
 
 const STATUS_CONFIG = {
-    queued:  { label: 'Queued',     color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200',  dot: 'bg-amber-400' },
-    running: { label: 'Processing', color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',    dot: 'bg-blue-500 animate-pulse' },
-    done:    { label: 'Completed',  color: 'text-green-700',  bg: 'bg-green-50 border-green-200',  dot: 'bg-green-500' },
-    error:   { label: 'Error',      color: 'text-red-600',    bg: 'bg-red-50 border-red-200',      dot: 'bg-red-500' },
-    paused:  { label: 'Paused',     color: 'text-slate-600',  bg: 'bg-slate-50 border-slate-200',  dot: 'bg-slate-400' },
+    queued:    { label: 'Queued',     color: 'text-amber-600',   bg: 'bg-amber-50 border-amber-200',   dot: 'bg-amber-400' },
+    running:   { label: 'Processing', color: 'text-blue-600',    bg: 'bg-blue-50 border-blue-200',     dot: 'bg-blue-500 animate-pulse' },
+    done:      { label: 'Completed',  color: 'text-green-700',   bg: 'bg-green-50 border-green-200',   dot: 'bg-green-500' },
+    error:     { label: 'Error',      color: 'text-red-600',     bg: 'bg-red-50 border-red-200',       dot: 'bg-red-500' },
+    paused:    { label: 'Paused',     color: 'text-slate-600',   bg: 'bg-slate-50 border-slate-200',   dot: 'bg-slate-400' },
+    cancelled: { label: 'Cancelled',  color: 'text-orange-600',  bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-400' },
 };
 
-export default function JobProgress({ jobId, onComplete }) {
+export default function JobProgress({ jobId, onComplete, onStatusChange }) {
     const [job, setJob] = useState(null);
     const [statusCounts, setStatusCounts] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -79,14 +80,15 @@ export default function JobProgress({ jobId, onComplete }) {
     };
 
     const handleStop = async () => {
-        if (!confirm('Abort this task? All pending and in-progress rows will be cancelled and the job will be marked as aborted.')) return;
+        if (!confirm('Cancel this task? All pending and in-progress rows will be cancelled.')) return;
         setStopping(true);
         try {
             await base44.functions.invoke('jobProcessor', { action: 'stop', job_id: jobId });
-            toast.success('Task aborted');
+            toast.success('Task cancelled');
             await loadJobStatus();
+            onStatusChange?.();
         } catch {
-            toast.error('Failed to stop task');
+            toast.error('Failed to cancel task');
         } finally {
             setStopping(false);
         }
@@ -147,7 +149,7 @@ export default function JobProgress({ jobId, onComplete }) {
     const isActive = job.status === 'queued' || job.status === 'running';
     const actualProcessed = statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows;
     const progress = job.total_rows > 0 ? Math.round((actualProcessed / job.total_rows) * 100) : 0;
-    const canResume = (job.status === 'error' || job.status === 'paused') && statusCounts?.pending > 0;
+    const canResume = (job.status === 'error' || job.status === 'paused' || job.status === 'cancelled') && (statusCounts?.pending > 0 || statusCounts?.cancelled > 0);
     const canDownload = job.status === 'done' || actualProcessed > 0;
 
     return (
@@ -177,7 +179,7 @@ export default function JobProgress({ jobId, onComplete }) {
 
             {/* Row counts */}
             {statusCounts && (
-                <div className="grid grid-cols-4 gap-2">
+                <div className={`grid gap-2 ${statusCounts.cancelled > 0 ? 'grid-cols-5' : 'grid-cols-4'}`}>
                     <div className="text-center p-2 rounded-lg bg-slate-50">
                         <p className="text-base font-bold text-slate-500">{statusCounts.pending}</p>
                         <p className="text-xs text-slate-400 mt-0.5">Pending</p>
@@ -194,6 +196,12 @@ export default function JobProgress({ jobId, onComplete }) {
                         <p className="text-base font-bold text-red-500">{statusCounts.error}</p>
                         <p className="text-xs text-slate-400 mt-0.5">Errors</p>
                     </div>
+                    {statusCounts.cancelled > 0 && (
+                        <div className="text-center p-2 rounded-lg bg-orange-50">
+                            <p className="text-base font-bold text-orange-500">{statusCounts.cancelled}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">Cancelled</p>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -222,11 +230,11 @@ export default function JobProgress({ jobId, onComplete }) {
                 )}
             </div>
 
-            {/* Error message */}
-            {job.error_message && job.status === 'error' && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 rounded-lg border border-red-100">
-                    <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
-                    <p className="text-xs text-red-700 leading-relaxed">{job.error_message}</p>
+            {/* Error / cancellation message */}
+            {job.error_message && (job.status === 'error' || job.status === 'cancelled') && (
+                <div className={`flex items-start gap-2 p-3 rounded-lg border ${job.status === 'cancelled' ? 'bg-orange-50 border-orange-100' : 'bg-red-50 border-red-100'}`}>
+                    <AlertCircle className={`w-4 h-4 mt-0.5 shrink-0 ${job.status === 'cancelled' ? 'text-orange-500' : 'text-red-500'}`} />
+                    <p className={`text-xs leading-relaxed ${job.status === 'cancelled' ? 'text-orange-700' : 'text-red-700'}`}>{job.error_message}</p>
                 </div>
             )}
 

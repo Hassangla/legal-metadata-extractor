@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
             }
             const freshJob = freshJobs[0];
 
-            if (freshJob.status === 'done' || freshJob.status === 'error') {
+            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'cancelled' || freshJob.status === 'paused') {
                 console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
                 lastResult = { status: freshJob.status };
                 break;

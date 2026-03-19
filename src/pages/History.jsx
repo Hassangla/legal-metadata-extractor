@@ -124,7 +124,9 @@ export default function History() {
         queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Queued' },
         running: { icon: Play, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Running' },
         done: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-100', label: 'Completed' },
-        error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' }
+        error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' },
+        paused: { icon: Clock, color: 'text-slate-500', bg: 'bg-slate-100', label: 'Paused' },
+        cancelled: { icon: XCircle, color: 'text-orange-500', bg: 'bg-orange-100', label: 'Cancelled' },
     };
 
     const filteredJobs = jobs.filter(job =>
@@ -262,7 +264,7 @@ export default function History() {
                                                                     variant="ghost"
                                                                     size="icon"
                                                                     onClick={(e) => e.stopPropagation()}
-                                                                    disabled={deleting === job.id || job.status === 'running' || job.status === 'queued'}
+                                                                    disabled={deleting === job.id || job.status === 'running' || job.status === 'queued' || job.status === 'processing'}
                                                                     title="Delete job"
                                                                     className="text-slate-400 hover:text-red-600"
                                                                 >
@@ -340,10 +342,11 @@ export default function History() {
                                 <JobProgress 
                                     jobId={selectedJobId}
                                     onComplete={() => loadJobs()}
+                                    onStatusChange={() => loadJobs()}
                                 />
 
-                                {/* Fix 11: Rerun buttons */}
-                                {selectedJob && selectedJob.status === 'done' && (
+                                {/* Rerun buttons */}
+                                {selectedJob && (selectedJob.status === 'done' || selectedJob.status === 'cancelled') && (
                                     <Card>
                                         <CardContent className="p-4">
                                             <p className="text-sm font-medium text-slate-700 mb-3">Rerun this job</p>
