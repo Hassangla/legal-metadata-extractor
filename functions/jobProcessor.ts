@@ -1214,7 +1214,6 @@ Deno.serve(async (req) => {
                     console.error('Failed to load economy codes (non-fatal):', ecoErr.message);
                 }
 
-                // Look up stored model pricing from ModelCatalog
                 let modelInputPrice = 0;
                 let modelOutputPrice = 0;
                 try {
@@ -1228,9 +1227,6 @@ Deno.serve(async (req) => {
                     }
                 } catch (_) {}
 
-                // Use smaller batch size when web search is enabled to avoid serverless timeout.
-                // Web search calls take 10-20s each; with batch=5 that's 50-100s which exceeds
-                // typical serverless timeouts (30-60s).
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
@@ -1282,11 +1278,7 @@ Deno.serve(async (req) => {
                         const searchChoiceCompatible = effectiveWebSearch !== 'none';
                         const hasRealWebSearch = effectiveWebSearch !== 'none';
 
-                        // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
-                        // If web search is unavailable, we enforce blank fields server-side after the LLM call.
-
-                        // Kimi thinking models tend to narrate their search process instead of
-                        // outputting JSON. Add an extra-strong reminder for these models.
+                        // Kimi thinking models need extra JSON reminder.
                         const isKimiThinking = (job.model_id || '').toLowerCase().includes('kimi') && 
                             ((job.model_id || '').toLowerCase().includes('think') || (job.model_id || '').toLowerCase().includes('k2'));
 
@@ -1426,9 +1418,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         let inputTokens = 0;
                         let outputTokens = 0;
 
-                        // Kimi uses an echo-based tool-call loop: the client echoes
-                        // $web_search arguments back, and Moonshot's server performs
-                        // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
                         let kimiObservedToolUrls = [];
@@ -1490,8 +1479,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
 
                         console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
 
-                        // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
-                        // do one retry with an explicit instruction to call $web_search ──
                         if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
                             && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
                             try {
@@ -1522,14 +1509,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // Downgrade search availability if tool silently failed or returned no URLs.
-                        // Kimi can execute $web_search without exposing URL citations in every response,
-                        // so treat observed server-side tool calls as valid search execution.
-                        // For Kimi: if we observed tool calls during the echo loop, trust that search worked
-                        // even if the final response doesn't have tool_calls in it.
-                        //
-                        // ALSO: for Responses API, check if the model's text content mentions URLs
-                        // even if extractToolUrlsFromResponse didn't find structured ones.
                         if (searchActuallyWorked && toolUrls.length === 0 && content) {
                             const contentUrls = extractUrlsFromText(content);
                             for (const u of contentUrls) {
@@ -1670,11 +1649,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        // ── INJECT TOOL URLs INTO EVIDENCE ──
-                        // When the provider actually performed web search (toolUrls > 0) but the
-                        // model left evidence URL fields empty (common with Responses API where
-                        // URLs are in annotations, not in the model's JSON), inject them so
-                        // provenance/closed-set checks can pass.
                         if (toolUrls.length > 0 && parsed?.evidence) {
                             const urlsStr = toolUrls.join('; ');
                             if (!(parsed.evidence.URLs_Considered || '').trim()) {
@@ -1702,8 +1676,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        // If structured tool URL extraction found none, try evidence-derived URLs.
-                        // These are lower confidence than tool-derived URLs and are marked separately.
                         let evidenceDerivedVerifiedUrls = [];
                         if (searchWasRequested && toolUrls.length === 0 && parsed?.evidence) {
                             const evidenceDerivedCandidates = extractEvidenceDerivedUrls(parsed.evidence);
@@ -1748,7 +1720,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             Flag: ev.Final_Flag || '',
                         };
 
-                        // Build raw output: include both parsed content and raw API response structure
                         let rawOutput = '=== EXTRACTED CONTENT ===\n' + (content || '') + '\n\n';
                         if (isResponsesApi && Array.isArray(data?.output)) {
                             rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
