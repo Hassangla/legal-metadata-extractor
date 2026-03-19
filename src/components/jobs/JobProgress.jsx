@@ -241,7 +241,13 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
             )}
 
             {/* Server notice */}
-            {isActive && (
+            {job.status === 'queued' && (
+                <div className="flex items-center gap-2 text-xs text-amber-600">
+                    <Clock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Queued — waiting for server to pick up (checks every 5 min)</span>
+                </div>
+            )}
+            {job.status === 'running' && (
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                     <span>Processing on server — safe to close this tab</span>
