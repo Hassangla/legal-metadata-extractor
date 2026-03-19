@@ -1936,12 +1936,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 ]);
                 let stopped = 0;
                 for (const row of [...rowsToStop, ...processingRows2]) {
-                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Stopped by user' }));
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Aborted by user' }));
                     stopped++;
                 }
                 const stopInTok = stopJob.total_input_tokens || 0;
                 const stopOutTok = stopJob.total_output_tokens || 0;
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'done', error_message: `Stopped by user. ${stopped} rows skipped.`, total_input_tokens: stopInTok, total_output_tokens: stopOutTok, estimated_cost_usd: stopJob.estimated_cost_usd || estimateCostFromTable(stopJob.model_id, stopInTok, stopOutTok) }));
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: `Aborted by user. ${stopped} rows skipped.`, total_input_tokens: stopInTok, total_output_tokens: stopOutTok, estimated_cost_usd: stopJob.estimated_cost_usd || estimateCostFromTable(stopJob.model_id, stopInTok, stopOutTok) }));
                 return Response.json({ success: true, stopped });
             }
 
