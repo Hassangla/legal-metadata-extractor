@@ -9,7 +9,15 @@ const PROVIDERS = {
         modelsUrl:  (base) => `${base}/v1/models`,
         chatUrl:    (base, _model) => `${base}/v1/chat/completions`,
         authHeaders:(key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
-        parseModels:(data) => (data.data || []).map((m) => ({ id: m.id, name: m.id })),
+        parseModels:(data) => (data.data || [])
+            .filter((m) => {
+                const id = (m.id || '').toLowerCase();
+                // Skip non-chat models: embeddings, audio, realtime, image gen, moderation, tts, whisper, codex, dall-e
+                if (/^(text-embedding|embedding|dall-e|tts-|whisper|babbage|davinci|canary|omni-moderation|gpt-image|computer-use)/.test(id)) return false;
+                if (id.includes('-realtime') || id.includes('-audio') || id.includes('-transcribe')) return false;
+                return true;
+            })
+            .map((m) => ({ id: m.id, name: m.id })),
         chatFormat: 'openai',
         cloudflareRisk: true,
         webSearchTool: 'web_search_preview',
