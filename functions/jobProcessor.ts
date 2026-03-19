@@ -397,6 +397,36 @@ async function fetchWithRetry(url, init, retries) {
     throw new Error('Exhausted retries');
 }
 
+// ── KIMI SEARCH LOOP ────────────────────────────────────────
+async function runKimiSearchLoop(url, init, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls, _providerType) {
+    const MAX_TOOL_ROUNDS = 10;
+    const bodyObj = JSON.parse(init.body);
+    let messages = [...bodyObj.messages];
+    let data;
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const resp = await fetchWithRetry(url, { method: 'POST', headers: init.headers, body: JSON.stringify({ ...bodyObj, messages }) });
+        data = await resp.json();
+        if (data.usage) { inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0; outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0; }
+        const msg = data.choices?.[0]?.message;
+        const finishReason = data.choices?.[0]?.finish_reason;
+        if (!msg?.tool_calls || msg.tool_calls.length === 0 || finishReason === 'stop') break;
+        kimiObservedToolCalls = true;
+        for (const tc of msg.tool_calls) {
+            const args = tc.function?.arguments || '';
+            for (const u of extractUrlsFromText(args)) { if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u); }
+            try { const deepUrls = []; collectUrlsDeep(JSON.parse(args), deepUrls); for (const u of deepUrls) { if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u); } } catch (_) {}
+        }
+        messages.push(msg);
+        for (const tc of msg.tool_calls) { messages.push({ role: 'tool', tool_call_id: tc.id, content: tc.function?.arguments || '{}' }); }
+    }
+    const finalMsg = data?.choices?.[0]?.message;
+    if (finalMsg?.content && typeof finalMsg.content === 'string') {
+        const embeddedCalls = parseKimiToolCallsFromText(finalMsg.content);
+        if (embeddedCalls.length > 0) { kimiObservedToolCalls = true; for (const ec of embeddedCalls) { for (const u of extractUrlsFromText(ec.function?.arguments || '')) { if (!kimiObservedToolUrls.includes(u)) kimiObservedToolUrls.push(u); } } }
+    }
+    return { data, inputTokens, outputTokens, kimiObservedToolUrls, kimiObservedToolCalls };
+}
+
 // ── JSON EXTRACTION ─────────────────────────────────────────
 function extractJSON(content) {
     try { return JSON.parse(content.trim()); } catch (_) {}
