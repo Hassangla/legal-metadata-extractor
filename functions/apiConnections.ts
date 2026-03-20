@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
 // ── PROVIDER REGISTRY ───────────────────────────────────────
 
@@ -670,14 +670,19 @@ Deno.serve(async (req) => {
                 // Re-apply web search detection in-memory only; batch DB updates
                 // for models that actually changed to avoid excessive API calls.
                 if (conn && models.length > 0) {
-                    const pk = conn.provider_type || 'openai_compatible';
+                    // CRITICAL: re-detect provider from base_url if conn.provider_type is missing/stale
+                    // to avoid falling back to 'openai_compatible' for real OpenAI connections.
+                    const pk = conn.provider_type || detectProvider(conn.base_url, '');
                     const toUpdate = [];
                     for (const m of models) {
                         const ws = detectWebSearch(pk, m.model_id, conn.base_url);
-                        if (ws.supports !== null && (
+                        // Update if detection returned a definitive answer AND the stored value differs,
+                        // OR if the stored value is false/null but detection says true (fix stale data).
+                        const needsUpdate = ws.supports !== null && (
                             m.supports_web_search !== ws.supports ||
                             JSON.stringify(m.web_search_options || []) !== JSON.stringify(ws.options)
-                        )) {
+                        );
+                        if (needsUpdate) {
                             m.supports_web_search = ws.supports;
                             m.web_search_options = ws.options;
                             toUpdate.push(m);
@@ -696,9 +701,17 @@ Deno.serve(async (req) => {
                     }
                 }
 
+                // Also fix stale connection provider_type if it doesn't match URL detection
+                const detectedPk = detectProvider(conn?.base_url || '', '');
+                if (conn && detectedPk !== 'openai_compatible' && conn.provider_type !== detectedPk) {
+                    try {
+                        await safeEntityOp(() => base44.entities.APIConnection.update(conn.id, { provider_type: detectedPk }));
+                    } catch (_) {}
+                }
+
                 return Response.json({
                     models,
-                    provider_type: conn?.provider_type || null,
+                    provider_type: pk || conn?.provider_type || null,
                 });
             }
 

@@ -207,11 +207,23 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                         </div>
                                     ) : selectedModelData?.supports_web_search === false ? (
                                         <div className="flex items-center gap-1 text-red-500">
-                                            <XCircle className="w-4 h-4" /><span className="text-sm">Not supported</span>
+                                            <XCircle className="w-4 h-4" />
+                                            <span className="text-sm">
+                                                {providerType === 'openai_compatible'
+                                                    ? 'Not available (generic OpenAI-compatible provider)'
+                                                    : providerType === 'groq' || providerType === 'together' || providerType === 'mistral'
+                                                        ? `Not available on ${PROVIDER_LABELS[providerType] || providerType}`
+                                                        : 'Not supported for this model'}
+                                            </span>
                                         </div>
                                     ) : (
                                         <div className="flex items-center gap-1 text-amber-500">
-                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown for this provider</span>
+                                            <HelpCircle className="w-4 h-4" />
+                                            <span className="text-sm">
+                                                {providerType === 'openai_compatible'
+                                                    ? 'Unknown — custom deployment/model alias not recognized'
+                                                    : `Unknown for ${PROVIDER_LABELS[providerType] || providerType || 'this provider'}`}
+                                            </span>
                                         </div>
                                     )}
                                 </div>
@@ -248,7 +260,11 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                 <SelectTrigger className="opacity-50"><SelectValue placeholder="Not available for this model" /></SelectTrigger>
                                 <SelectContent><SelectItem value="none">Not available</SelectItem></SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-500">This model doesn't support web search tools</p>
+                            <p className="text-xs text-slate-500">
+                            {providerType === 'openai_compatible'
+                                ? 'Web search requires a native provider connection (OpenAI, Anthropic, Google, Perplexity)'
+                                : 'This model does not support web search tools on this provider'}
+                        </p>
                         </div>
                     )}
                 </div>
