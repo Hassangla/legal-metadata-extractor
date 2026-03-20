@@ -702,16 +702,16 @@ Deno.serve(async (req) => {
                 }
 
                 // Also fix stale connection provider_type if it doesn't match URL detection
-                const detectedPk = detectProvider(conn?.base_url || '', '');
-                if (conn && detectedPk !== 'openai_compatible' && conn.provider_type !== detectedPk) {
+                const resolvedPk = conn ? (conn.provider_type || detectProvider(conn.base_url || '', '')) : null;
+                if (conn && resolvedPk && resolvedPk !== 'openai_compatible' && conn.provider_type !== resolvedPk) {
                     try {
-                        await safeEntityOp(() => base44.entities.APIConnection.update(conn.id, { provider_type: detectedPk }));
+                        await safeEntityOp(() => base44.entities.APIConnection.update(conn.id, { provider_type: resolvedPk }));
                     } catch (_) {}
                 }
 
                 return Response.json({
                     models,
-                    provider_type: pk || conn?.provider_type || null,
+                    provider_type: resolvedPk || conn?.provider_type || null,
                 });
             }
 
