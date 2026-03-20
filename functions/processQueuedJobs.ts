@@ -133,10 +133,11 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke jobProcessor.process using service role
+            // Invoke jobProcessor.process — use base44 (request-scoped client)
+            // instead of sr.functions.invoke which gets 403 on this platform.
             let batchResp;
             try {
-                batchResp = await sr.functions.invoke('jobProcessor', {
+                batchResp = await base44.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id,
                     _service_call: true,
