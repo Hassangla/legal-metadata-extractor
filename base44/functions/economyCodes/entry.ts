@@ -248,25 +248,52 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'file_url is required' }, { status: 400 });
                 }
 
-                const fileResponse = await fetch(file_url);
+                let fileResponse;
+                try {
+                    fileResponse = await fetch(file_url);
+                } catch (fetchErr) {
+                    return Response.json({ error: `Failed to download uploaded file: ${fetchErr.message}` }, { status: 400 });
+                }
                 if (!fileResponse.ok) {
                     return Response.json({ error: `Failed to fetch uploaded file (HTTP ${fileResponse.status})` }, { status: 400 });
                 }
 
-                const name = (file_name || '').toLowerCase();
+                const fname = (file_name || '').toLowerCase();
                 let rows;
 
-                if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-                    const buffer = await fileResponse.arrayBuffer();
-                    rows = parseExcel(buffer);
+                if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) {
+                    // ── Excel path: dedicated try/catch so parser failures → 400 ──
+                    let buffer;
+                    try {
+                        buffer = await fileResponse.arrayBuffer();
+                    } catch (readErr) {
+                        return Response.json({ error: `Could not read file content: ${readErr.message}` }, { status: 400 });
+                    }
+                    if (!buffer || buffer.byteLength === 0) {
+                        return Response.json({ error: 'Uploaded Excel file is empty (0 bytes).' }, { status: 400 });
+                    }
+                    try {
+                        rows = parseExcel(buffer);
+                    } catch (parseErr) {
+                        // XLSX.read can throw for corrupt/password-protected/non-Excel files
+                        const hint = parseErr.message || String(parseErr);
+                        return Response.json({
+                            error: `Invalid or unreadable Excel file. The workbook could not be parsed. Detail: ${hint.slice(0, 300)}`
+                        }, { status: 400 });
+                    }
                     if (rows === null) {
                         return Response.json({
-                            error: `Could not find required columns in Excel file. Expected headers like: [${[...ECONOMY_HEADERS].join(', ')}] and [${[...CODE_HEADERS].join(', ')}].`
+                            error: `No usable worksheet data found. Expected at least one sheet with headers like: [${[...ECONOMY_HEADERS].join(', ')}] and [${[...CODE_HEADERS].join(', ')}].`
                         }, { status: 400 });
                     }
                 } else {
-                    // CSV / TSV / any text-based file
-                    const csvText = await fileResponse.text();
+                    // ── CSV / TSV / text path ──
+                    let csvText;
+                    try {
+                        csvText = await fileResponse.text();
+                    } catch (readErr) {
+                        return Response.json({ error: `Could not read file content: ${readErr.message}` }, { status: 400 });
+                    }
                     const result = parseCSVText(csvText);
                     if (result.error) {
                         return Response.json({ error: result.error }, { status: 400 });
@@ -278,7 +305,51 @@ Deno.serve(async (req) => {
                     return Response.json({ error: 'File parsed successfully but contained no valid data rows.' }, { status: 400 });
                 }
 
-                // MERGE: upsert logic (preserves existing data, only adds/updates)
+                // ── DEDUPLICATE & VALIDATE uploaded rows before any DB writes ──
+                const deduped = [];
+                const seenInFile = {}; // economy_key → { code, fileRow (1-based) }
+                const rowErrors = [];
+
+                for (let i = 0; i < rows.length; i++) {
+                    const fileRow = i + 2; // row 1 = headers, data starts at row 2
+                    const economy = (rows[i].economy || '').trim().toLowerCase();
+                    const code = (rows[i].economy_code || '').trim().toUpperCase();
+
+                    if (!economy) {
+                        rowErrors.push({ row: fileRow, reason: 'Missing economy name' });
+                        continue;
+                    }
+                    if (!code) {
+                        rowErrors.push({ row: fileRow, reason: `Missing economy code for "${economy}"` });
+                        continue;
+                    }
+
+                    const prev = seenInFile[economy];
+                    if (prev) {
+                        if (prev.code !== code) {
+                            rowErrors.push({
+                                row: fileRow,
+                                reason: `Conflicting code for "${economy}": row ${prev.fileRow} has "${prev.code}", row ${fileRow} has "${code}"`
+                            });
+                        }
+                        // Either way, skip the duplicate
+                        continue;
+                    }
+
+                    seenInFile[economy] = { code, fileRow };
+                    deduped.push({ economy, economy_code: code });
+                }
+
+                // If zero usable rows after validation, return structured error
+                if (deduped.length === 0) {
+                    const detail = rowErrors.length > 0
+                        ? rowErrors.slice(0, 5).map(e => `Row ${e.row}: ${e.reason}`).join('; ')
+                          + (rowErrors.length > 5 ? ` (and ${rowErrors.length - 5} more)` : '')
+                        : 'File contained no usable data.';
+                    return Response.json({ error: `No valid rows after validation. ${detail}` }, { status: 400 });
+                }
+
+                // ── MERGE: upsert against existing DB records ──
                 const existing = await base44.entities.EconomyCode.list();
                 const existingMap = {};
                 for (const ec of existing) {
@@ -288,31 +359,46 @@ Deno.serve(async (req) => {
                 let imported = 0;
                 let updated = 0;
                 let skipped = 0;
+                const writeErrors = [];
 
-                for (const item of rows) {
+                for (const item of deduped) {
                     const key = item.economy;
                     const code = item.economy_code;
                     const existingEntry = existingMap[key];
 
-                    if (existingEntry) {
-                        if (existingEntry.economy_code !== code) {
-                            await base44.entities.EconomyCode.update(existingEntry.id, {
+                    try {
+                        if (existingEntry) {
+                            if (existingEntry.economy_code !== code) {
+                                await base44.entities.EconomyCode.update(existingEntry.id, { economy_code: code });
+                                existingEntry.economy_code = code; // update in-memory to prevent stale reads
+                                updated++;
+                            } else {
+                                skipped++;
+                            }
+                        } else {
+                            const created = await base44.entities.EconomyCode.create({
+                                economy: key,
                                 economy_code: code
                             });
-                            updated++;
-                        } else {
-                            skipped++;
+                            // Track in-memory so later rows referencing the same economy won't double-create
+                            existingMap[key] = { id: created.id, economy: key, economy_code: code };
+                            imported++;
                         }
-                    } else {
-                        await base44.entities.EconomyCode.create({
-                            economy: key,
-                            economy_code: code
-                        });
-                        imported++;
+                    } catch (writeErr) {
+                        writeErrors.push({ economy: key, reason: writeErr.message || 'Write failed' });
                     }
                 }
 
-                return Response.json({ success: true, imported, updated, skipped, total: rows.length });
+                const resp = { success: true, imported, updated, skipped, total: deduped.length };
+                if (rowErrors.length > 0) {
+                    resp.row_warnings = rowErrors.slice(0, 20);
+                    resp.row_warning_count = rowErrors.length;
+                }
+                if (writeErrors.length > 0) {
+                    resp.write_errors = writeErrors.slice(0, 20);
+                    resp.write_error_count = writeErrors.length;
+                }
+                return Response.json(resp);
             }
 
             case 'update': {
