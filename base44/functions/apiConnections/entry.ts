@@ -621,23 +621,21 @@ Deno.serve(async (req) => {
                             }
                         }
                     } catch (_) {}
-                } else if (prov.chatFormat === 'openai') {
-                    try {
-                        const r = await safeFetch(prov.chatUrl(conn.base_url, model_id), {
-                            method: 'POST',
-                            headers: prov.authHeaders(apiKey),
-                            body: JSON.stringify({
-                                model: model_id,
-                                messages: [{ role: 'user', content: 'What is 1+1?' }],
-                                max_tokens: 5,
-                                tools: [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }],
-                            }),
-                        }, providerKey);
-                        if (r.ok) {
-                            supportsWebSearch = true;
-                            webSearchOptions = ['web_search'];
-                        }
-                    } catch (_) {}
+                } else if (providerKey === 'openai' || providerKey === 'openai_compatible') {
+                    // For OpenAI and compatible providers, use deterministic detection
+                    // based on the known model prefix list rather than a generic function-calling
+                    // probe (which tests tool-calling, not actual web search capability).
+                    const wsDetect = detectWebSearch(providerKey, model_id, conn.base_url);
+                    if (wsDetect.supports === true) {
+                        supportsWebSearch = true;
+                        webSearchOptions = wsDetect.options;
+                    }
+                } else if (prov.chatFormat === 'google') {
+                    const wsDetect = detectWebSearch(providerKey, model_id, conn.base_url);
+                    if (wsDetect.supports === true) {
+                        supportsWebSearch = true;
+                        webSearchOptions = wsDetect.options;
+                    }
                 }
 
                 const existing = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
