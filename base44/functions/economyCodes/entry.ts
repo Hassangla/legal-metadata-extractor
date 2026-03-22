@@ -141,7 +141,7 @@ function parseCSVText(raw) {
     return { rows };
 }
 
-// Excel parser for economy codes
+// Excel parser for economy codes (uses shared header sets)
 function parseExcel(buffer) {
     const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
     if (!workbook.SheetNames || workbook.SheetNames.length === 0) return null;
@@ -153,14 +153,8 @@ function parseExcel(buffer) {
         const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
         if (!data || data.length === 0) continue;
 
-        const economyKey = Object.keys(data[0]).find(h => {
-            const lh = h.toLowerCase().trim();
-            return lh === 'economy' || lh === 'economy_name' || lh === 'name' || lh === 'country' || lh === 'country_name';
-        });
-        const codeKey = Object.keys(data[0]).find(h => {
-            const lh = h.toLowerCase().trim();
-            return lh === 'economy_code' || lh === 'code' || lh === 'iso_code' || lh === 'iso3' || lh === 'country_code';
-        });
+        const economyKey = Object.keys(data[0]).find(h => ECONOMY_HEADERS.has(h.toLowerCase().trim()));
+        const codeKey    = Object.keys(data[0]).find(h => CODE_HEADERS.has(h.toLowerCase().trim()));
 
         if (!economyKey || !codeKey) continue;
 
@@ -169,7 +163,7 @@ function parseExcel(buffer) {
             const economy = String(row[economyKey] || '').trim();
             const code = String(row[codeKey] || '').trim();
             if (economy && code) {
-                rows.push({ economy: economy.toLowerCase().trim(), economy_code: code.toUpperCase() });
+                rows.push({ economy: economy.toLowerCase(), economy_code: code.toUpperCase() });
             }
         }
         if (rows.length > 0) return rows;
