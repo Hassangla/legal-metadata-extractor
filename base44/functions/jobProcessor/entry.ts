@@ -1663,36 +1663,42 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        if (toolUrls.length > 0 && parsed?.evidence) {
-                            const urlsStr = toolUrls.join('; ');
-                            if (!(parsed.evidence.URLs_Considered || '').trim()) parsed.evidence.URLs_Considered = urlsStr;
-                            if (!(parsed.evidence.Selected_Source_URLs || '').trim()) parsed.evidence.Selected_Source_URLs = urlsStr;
-                            if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
-                                const nonWbl = toolUrls.filter(u => !isWblUrl(u));
-                                const govUrl = nonWbl.find(u => /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u));
-                                const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|wipo\.int/i.test(u));
-                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || nonWbl[0] || '';
-                            }
-                            if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
-                                const fu = parsed.evidence.Final_Instrument_URL.toLowerCase();
-                                parsed.evidence.Source_Tier = /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(fu) ? '1' : /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(fu) ? '2' : '3';
-                            }
-                            // URL PROVENANCE: filter model-populated URL fields to only tool-returned URLs
-                            const toolSet = new Set(toolUrls.map(u => u.replace(/\/+$/, '').toLowerCase()));
-                            const isTool = (u) => toolSet.has(u.replace(/\/+$/, '').toLowerCase());
-                            const filterField = (v) => { if (!v) return ''; const kept = parseUrlList(v).filter(isTool), dropped = parseUrlList(v).filter(u => !isTool(u)); if (dropped.length) console.log(`[DIAG] row=${row.row_index} provenance-stripped ${dropped.length} model-typed URL(s): ${dropped.slice(0,3).join(', ')}`); return kept.join('; '); };
-                            parsed.evidence.URLs_Considered = filterField(parsed.evidence.URLs_Considered);
-                            parsed.evidence.Selected_Source_URLs = filterField(parsed.evidence.Selected_Source_URLs);
-                            const fiu = (parsed.evidence.Final_Instrument_URL || '').trim();
-                            if (fiu && !isTool(fiu)) { console.log(`[DIAG] row=${row.row_index} provenance-stripped Final_Instrument_URL: ${fiu}`); parsed.evidence.Final_Instrument_URL = ''; }
-                        }
-
-                        // STRICT PROVENANCE: no tool URLs → blank model-typed URL fields (fail closed)
+                        // ── TOOL-PROVENANCE GATE: only structured tool-returned URLs are trusted ──
+                        // When toolUrls exist, backfill empty fields from them and strip any
+                        // model-typed URLs that lack tool provenance.
+                        // When toolUrls are empty, ALL URL fields are blanked (fail closed).
                         const evidenceDerivedVerifiedUrls = [];
-                        if (searchWasRequested && toolUrls.length === 0 && parsed?.evidence) {
-                            const modelUrls = extractEvidenceDerivedUrls(parsed.evidence);
-                            if (modelUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Discarded ${modelUrls.length} model-typed URL(s): ${modelUrls.slice(0,3).join(', ')}`);
-                            parsed.evidence.URLs_Considered = ''; parsed.evidence.Selected_Source_URLs = ''; parsed.evidence.Final_Instrument_URL = '';
+                        if (parsed?.evidence) {
+                            if (toolUrls.length > 0) {
+                                const urlsStr = toolUrls.join('; ');
+                                if (!(parsed.evidence.URLs_Considered || '').trim()) parsed.evidence.URLs_Considered = urlsStr;
+                                if (!(parsed.evidence.Selected_Source_URLs || '').trim()) parsed.evidence.Selected_Source_URLs = urlsStr;
+                                if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
+                                    const nonWbl = toolUrls.filter(u => !isWblUrl(u));
+                                    const govUrl = nonWbl.find(u => /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                    const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|wipo\.int/i.test(u));
+                                    parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || nonWbl[0] || '';
+                                }
+                                if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
+                                    const fu = parsed.evidence.Final_Instrument_URL.toLowerCase();
+                                    // Exclude WBL from Tier 2 — only non-WBL worldbank pages qualify
+                                    parsed.evidence.Source_Tier = /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(fu) ? '1' : /faolex|natlex|ilo\.org|wipo\.int/i.test(fu) ? '2' : '3';
+                                }
+                                // PROVENANCE FILTER: strip any URL not in the tool-returned set
+                                const toolSet = new Set(toolUrls.map(u => u.replace(/\/+$/, '').toLowerCase()));
+                                const isTool = (u) => toolSet.has(u.replace(/\/+$/, '').toLowerCase());
+                                const filterField = (v) => { if (!v) return ''; const kept = parseUrlList(v).filter(isTool), dropped = parseUrlList(v).filter(u => !isTool(u)); if (dropped.length) console.log(`[PROVENANCE] row=${row.row_index} stripped ${dropped.length} non-tool URL(s): ${dropped.slice(0,3).join(', ')}`); return kept.join('; '); };
+                                parsed.evidence.URLs_Considered = filterField(parsed.evidence.URLs_Considered);
+                                parsed.evidence.Selected_Source_URLs = filterField(parsed.evidence.Selected_Source_URLs);
+                                const fiu = (parsed.evidence.Final_Instrument_URL || '').trim();
+                                if (fiu && !isTool(fiu)) { console.log(`[PROVENANCE] row=${row.row_index} stripped Final_Instrument_URL (no tool provenance): ${fiu}`); parsed.evidence.Final_Instrument_URL = ''; }
+                            } else {
+                                // FAIL CLOSED: zero tool URLs → blank ALL trusted URL fields unconditionally.
+                                // This covers both search-requested (silent tool failure) and no-search runs.
+                                const modelUrls = extractEvidenceDerivedUrls(parsed.evidence);
+                                if (modelUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Discarded ${modelUrls.length} model-typed URL(s) (0 tool URLs): ${modelUrls.slice(0,3).join(', ')}`);
+                                parsed.evidence.URLs_Considered = ''; parsed.evidence.Selected_Source_URLs = ''; parsed.evidence.Final_Instrument_URL = '';
+                            }
                         }
 
                         // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
