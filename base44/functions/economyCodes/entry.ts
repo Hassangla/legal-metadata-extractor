@@ -180,7 +180,13 @@ Deno.serve(async (req) => {
             return Response.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { action, ...params } = await req.json();
+        let body;
+        try {
+            body = await req.json();
+        } catch (_) {
+            return Response.json({ error: 'Invalid request body. Expected JSON with an "action" field.' }, { status: 400 });
+        }
+        const { action, ...params } = body;
 
         switch (action) {
             case 'list': {
