@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
-
+// ═══ AUTHORITATIVE RUNTIME — single source of truth for URL provenance, search handling, source selection, and job processing. No other file should duplicate these helpers. ═══
 const BATCH_SIZE=3,MAX_RETRIES=3,RETRY_BASE_MS=2000,ENTITY_RETRY_ATTEMPTS=5,ENTITY_RETRY_BASE_MS=500,ENTITY_CREATE_CHUNK_SIZE=50;
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 const isRateLimitError=(err)=>/rate.?limit|429|too many requests/i.test(String(err?.message||err||''));
