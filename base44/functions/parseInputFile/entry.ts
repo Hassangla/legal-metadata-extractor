@@ -260,8 +260,13 @@ Deno.serve(async (req) => {
         });
 
     } catch (error) {
+        const msg = error?.message || String(error);
+        // Classify known workbook/data errors as 400 instead of 500
+        const isDataError = /sheet|workbook|xlsx|header|column|row|parse|range|cell|buffer|arraybuffer/i.test(msg);
         return Response.json({
-            error: `Unexpected error: ${error.message}`
-        }, { status: 500 });
+            error: isDataError
+                ? `File processing error: ${msg}. Check that the file is a valid Excel workbook.`
+                : `Unexpected error: ${msg}`
+        }, { status: isDataError ? 400 : 500 });
     }
 });
