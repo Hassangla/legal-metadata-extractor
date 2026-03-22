@@ -1254,9 +1254,8 @@ Deno.serve(async (req) => {
                     try {
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
-                        const {code:economyCode,ecoAlias,ecoAliasTarget} = resolveEconomyCode(input.Economy, economyMap);
-                        if(ecoAlias) console.log(`[ECON] row=${row.row_index} Alias: "${input.Economy}"→"${ecoAliasTarget}" code="${economyCode||'MISSING'}"`);
-                        else if(!economyCode) console.log(`[ECON] row=${row.row_index} No match: "${input.Economy}"`);
+                        const {code:economyCode} = resolveEconomyCode(input.Economy, economyMap);
+                        if(!economyCode) console.log(`[ECON] row=${row.row_index} No exact match: "${input.Economy}"`);
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
