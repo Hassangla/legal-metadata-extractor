@@ -1349,6 +1349,13 @@ AFTER SEARCHING — follow these steps:
 9. Record all evidence and reasoning.
 10. Set Source_Tier to the tier number of your best source.
 
+WBL EXCLUSION RULE — MANDATORY:
+- URLs from https://wbl.worldbank.org/ (Women, Business and the Law) must NEVER be used as Final_Instrument_URL. WBL is a secondary index, not a primary legal source.
+- If your search results include a WBL page, treat it ONLY as a lead: extract the law name/number mentioned on the WBL page and perform ADDITIONAL searches to find the actual instrument on an official or reliable source.
+- Preferred alternative sources (in priority order): official government portals (.gov, parliament, gazette, legislation portals), FAOLEX, NATLEX, WIPO, ILO, or similar reliable legal databases.
+- You MUST continue searching until you find an acceptable non-WBL source. Do NOT stop at the WBL result.
+- If after exhaustive searching no acceptable alternative source exists, leave Final_Instrument_URL as an empty string "" rather than using a WBL URL.
+
 CRITICAL: URLs_Considered and Selected_Source_URLs MUST NOT be empty if you performed searches. Copy the URLs from your search results into these fields.`;
                         } else {
                             searchInstructions = `NOTE: Web search is NOT available for this request. Do NOT attempt to call any search tool.
