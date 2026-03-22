@@ -907,6 +907,8 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
+    // ── (A1-POST) WBL re-check after step B URL substitution ──
+    if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) { console.log(`[WBL-BLOCK] row=${ctx.row_index} Post-verify caught WBL "${ev.Final_Instrument_URL}"`); addReason(`WBL exclusion (post-verify): blanked "${ev.Final_Instrument_URL}".`); ev.Final_Instrument_URL=''; }
     // Tier 5 hard-stop re-enforcement (prevent later steps from repopulating restricted fields)
     if (isTier5) { for (const f of ['Final_Enactment_Date','Final_Date_of_Entry_in_Force','Final_Repeal_Year','Final_Current_Status','Final_Public']) ev[f]=''; ev.Final_Flag='Tier 5'; }
 
