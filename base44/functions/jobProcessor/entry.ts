@@ -1693,13 +1693,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             if (fiu && !isTool(fiu)) { console.log(`[DIAG] row=${row.row_index} provenance-stripped Final_Instrument_URL: ${fiu}`); parsed.evidence.Final_Instrument_URL = ''; }
                         }
 
-                        let evidenceDerivedVerifiedUrls = [];
+                        // STRICT PROVENANCE: no tool URLs → blank model-typed URL fields (fail closed)
+                        const evidenceDerivedVerifiedUrls = [];
                         if (searchWasRequested && toolUrls.length === 0 && parsed?.evidence) {
-                            const evidenceDerivedCandidates = extractEvidenceDerivedUrls(parsed.evidence);
-                            evidenceDerivedVerifiedUrls = await verifyCandidateUrls(evidenceDerivedCandidates, 8);
-                            if (evidenceDerivedVerifiedUrls.length > 0) {
-                                searchActuallyWorked = true;
-                            }
+                            const modelUrls = extractEvidenceDerivedUrls(parsed.evidence);
+                            if (modelUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Discarded ${modelUrls.length} model-typed URL(s): ${modelUrls.slice(0,3).join(', ')}`);
+                            parsed.evidence.URLs_Considered = ''; parsed.evidence.Selected_Source_URLs = ''; parsed.evidence.Final_Instrument_URL = '';
                         }
 
                         // ── SERVER-SIDE VERIFICATION & NORMALIZATION ──
