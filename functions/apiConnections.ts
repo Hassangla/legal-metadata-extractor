@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
 // ── PROVIDER REGISTRY ───────────────────────────────────────
 
@@ -9,15 +9,7 @@ const PROVIDERS = {
         modelsUrl:  (base) => `${base}/v1/models`,
         chatUrl:    (base, _model) => `${base}/v1/chat/completions`,
         authHeaders:(key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
-        parseModels:(data) => (data.data || [])
-            .filter((m) => {
-                const id = (m.id || '').toLowerCase();
-                // Skip non-chat models: embeddings, audio, realtime, image gen, moderation, tts, whisper, codex, dall-e
-                if (/^(text-embedding|embedding|dall-e|tts-|whisper|babbage|davinci|canary|omni-moderation|gpt-image|computer-use)/.test(id)) return false;
-                if (id.includes('-realtime') || id.includes('-audio') || id.includes('-transcribe')) return false;
-                return true;
-            })
-            .map((m) => ({ id: m.id, name: m.id })),
+        parseModels:(data) => (data.data || []).map((m) => ({ id: m.id, name: m.id })),
         chatFormat: 'openai',
         cloudflareRisk: true,
         webSearchTool: 'web_search_preview',
@@ -262,14 +254,21 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
+    // OpenAI direct: strict allowlist for web search models
+    // Only models verified to work with Responses API web_search tool
+    const OPENAI_WEBSEARCH_ALLOWLIST = new Set([
+        'gpt-4o', 'gpt-4o-mini', 'gpt-4o-search-preview',
+        'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+    ]);
     if (providerKey === 'openai') {
-        // Pattern-based: automatically covers gpt-5.x, gpt-6, chatgpt-4o, and future models.
-        const WEB_SEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
-        const matches = WEB_SEARCH_PREFIXES.some(prefix =>
-            id === prefix || id.startsWith(prefix + '-') || id.startsWith(prefix + '.') || id.startsWith(prefix + ' ')
-        );
-        if (matches || id.includes('search-preview') || id.includes('search-api')) {
+        // Check exact match first, then prefix match
+        if (OPENAI_WEBSEARCH_ALLOWLIST.has(id)) {
             return { supports: true, options: ['web_search_preview'] };
+        }
+        for (const allowed of OPENAI_WEBSEARCH_ALLOWLIST) {
+            if (id.startsWith(allowed + '-')) {
+                return { supports: true, options: ['web_search_preview'] };
+            }
         }
         return { supports: false, options: [] };
     }
@@ -310,16 +309,6 @@ const STATIC_PRICING = {
     'gpt-4.1-mini':        { input: 0.40,  output: 1.60 },
     'gpt-4.1-nano':        { input: 0.10,  output: 0.40 },
     'gpt-4.5-preview':     { input: 75.00, output: 150.00 },
-    'gpt-5':               { input: 2.00,  output: 8.00 },
-    'gpt-5-mini':          { input: 0.40,  output: 1.60 },
-    'gpt-5-nano':          { input: 0.10,  output: 0.40 },
-    'gpt-5.1':             { input: 2.00,  output: 8.00 },
-    'gpt-5.2':             { input: 2.00,  output: 8.00 },
-    'gpt-5.2-pro':         { input: 15.00, output: 60.00 },
-    'gpt-5.4':             { input: 2.00,  output: 8.00 },
-    'gpt-5.4-mini':        { input: 0.40,  output: 1.60 },
-    'gpt-5.4-nano':        { input: 0.10,  output: 0.40 },
-    'gpt-5.4-pro':         { input: 15.00, output: 60.00 },
     'gpt-3.5-turbo':       { input: 0.50,  output: 1.50 },
     'chatgpt-4o-latest':   { input: 5.00,  output: 15.00 },
     'o1':                  { input: 15.00, output: 60.00 },
@@ -621,21 +610,23 @@ Deno.serve(async (req) => {
                             }
                         }
                     } catch (_) {}
-                } else if (providerKey === 'openai' || providerKey === 'openai_compatible') {
-                    // For OpenAI and compatible providers, use deterministic detection
-                    // based on the known model prefix list rather than a generic function-calling
-                    // probe (which tests tool-calling, not actual web search capability).
-                    const wsDetect = detectWebSearch(providerKey, model_id, conn.base_url);
-                    if (wsDetect.supports === true) {
-                        supportsWebSearch = true;
-                        webSearchOptions = wsDetect.options;
-                    }
-                } else if (prov.chatFormat === 'google') {
-                    const wsDetect = detectWebSearch(providerKey, model_id, conn.base_url);
-                    if (wsDetect.supports === true) {
-                        supportsWebSearch = true;
-                        webSearchOptions = wsDetect.options;
-                    }
+                } else if (prov.chatFormat === 'openai') {
+                    try {
+                        const r = await safeFetch(prov.chatUrl(conn.base_url, model_id), {
+                            method: 'POST',
+                            headers: prov.authHeaders(apiKey),
+                            body: JSON.stringify({
+                                model: model_id,
+                                messages: [{ role: 'user', content: 'What is 1+1?' }],
+                                max_tokens: 5,
+                                tools: [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }],
+                            }),
+                        }, providerKey);
+                        if (r.ok) {
+                            supportsWebSearch = true;
+                            webSearchOptions = ['web_search'];
+                        }
+                    } catch (_) {}
                 }
 
                 const existing = await base44.entities.ModelCatalog.filter({ connection_id, model_id });
@@ -668,19 +659,14 @@ Deno.serve(async (req) => {
                 // Re-apply web search detection in-memory only; batch DB updates
                 // for models that actually changed to avoid excessive API calls.
                 if (conn && models.length > 0) {
-                    // CRITICAL: re-detect provider from base_url if conn.provider_type is missing/stale
-                    // to avoid falling back to 'openai_compatible' for real OpenAI connections.
-                    const pk = conn.provider_type || detectProvider(conn.base_url, '');
+                    const pk = conn.provider_type || 'openai_compatible';
                     const toUpdate = [];
                     for (const m of models) {
                         const ws = detectWebSearch(pk, m.model_id, conn.base_url);
-                        // Update if detection returned a definitive answer AND the stored value differs,
-                        // OR if the stored value is false/null but detection says true (fix stale data).
-                        const needsUpdate = ws.supports !== null && (
+                        if (ws.supports !== null && (
                             m.supports_web_search !== ws.supports ||
                             JSON.stringify(m.web_search_options || []) !== JSON.stringify(ws.options)
-                        );
-                        if (needsUpdate) {
+                        )) {
                             m.supports_web_search = ws.supports;
                             m.web_search_options = ws.options;
                             toUpdate.push(m);
@@ -690,34 +676,35 @@ Deno.serve(async (req) => {
                     const now = new Date().toISOString();
                     for (const m of toUpdate.slice(0, 10)) {
                         try {
-                            await safeEntityOp(() => base44.entities.ModelCatalog.update(m.id, {
+                            await base44.entities.ModelCatalog.update(m.id, {
                                 supports_web_search: m.supports_web_search,
                                 web_search_options: m.web_search_options,
                                 last_checked_at: now,
-                            }));
+                            });
                         } catch (_) {}
                     }
                 }
 
-                // Also fix stale connection provider_type if it doesn't match URL detection
-                const resolvedPk = conn ? (conn.provider_type || detectProvider(conn.base_url || '', '')) : null;
-                if (conn && resolvedPk && resolvedPk !== 'openai_compatible' && conn.provider_type !== resolvedPk) {
-                    try {
-                        await safeEntityOp(() => base44.entities.APIConnection.update(conn.id, { provider_type: resolvedPk }));
-                    } catch (_) {}
-                }
-
                 return Response.json({
                     models,
-                    provider_type: resolvedPk || conn?.provider_type || null,
+                    provider_type: conn?.provider_type || null,
                 });
             }
 
             case 'refreshAllModels': {
-                // Returns connection list; frontend refreshes one at a time via fetchModels
                 const allConnections = await base44.entities.APIConnection.list();
-                const connList = allConnections.map(c => ({ id: c.id, name: c.name }));
-                return Response.json({ connections: connList });
+                const results = [];
+                for (const conn of allConnections) {
+                    try {
+                        const apiKey = await decryptString(conn.api_key_encrypted);
+                        const pk = conn.provider_type || detectProvider(conn.base_url, apiKey);
+                        const models = await fetchAndStoreModels(base44, conn.id, conn.base_url, apiKey, pk);
+                        results.push({ id: conn.id, name: conn.name, success: true, model_count: models.length });
+                    } catch (e) {
+                        results.push({ id: conn.id, name: conn.name, success: false, error: e.message });
+                    }
+                }
+                return Response.json({ results });
             }
 
             case 'getProviders': {
@@ -750,13 +737,12 @@ Deno.serve(async (req) => {
                     if (m.pricing_source === 'manual') continue;
                     const price = lookupStaticPricing(mid);
                     if (price && (m.input_price_per_million !== price.input || m.output_price_per_million !== price.output)) {
-                        await safeEntityOp(() => base44.entities.ModelCatalog.update(m.id, {
+                        await base44.entities.ModelCatalog.update(m.id, {
                             input_price_per_million: price.input,
                             output_price_per_million: price.output,
                             pricing_source: 'static',
-                        }));
+                        });
                         pricingUpdated++;
-                        if (pricingUpdated % 5 === 0) await new Promise(r => setTimeout(r, 800));
                     }
                 }
                 return Response.json({ success: true, updated: pricingUpdated, total: pricingModels.length });
@@ -799,18 +785,6 @@ Deno.serve(async (req) => {
     }
 });
 
-// ── SHARED: Rate-limit-safe entity operation ────────────────
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-async function safeEntityOp(fn, maxRetries = 4) {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try { return await fn(); } catch (e) {
-            const is429 = /rate.?limit|429/i.test(e?.message || '');
-            if (!is429 || attempt === maxRetries) throw e;
-            await sleep(1500 * Math.pow(2, attempt) + Math.random() * 500);
-        }
-    }
-}
-
 // ── SHARED: Fetch models and store in ModelCatalog ──────────
 
 async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, providerKey) {
@@ -837,56 +811,37 @@ async function fetchAndStoreModels(base44, connectionId, baseUrl, apiKey, provid
     const existingMap = {};
     for (const em of existingModels) { existingMap[em.model_id] = em; }
 
-    // Batch new models for bulkCreate; only update existing models if data changed
-    const newModels = [];
-    const updatesNeeded = [];
-
     for (const m of models) {
         const ws = detectWebSearch(providerKey, m.id, baseUrl);
         const existing = existingMap[m.id];
         const pricing = lookupStaticPricing(m.id);
 
         if (!existing) {
-            newModels.push({
-                connection_id: connectionId, model_id: m.id, display_name: m.name,
-                supports_web_search: ws.supports, web_search_options: ws.options,
+            await base44.entities.ModelCatalog.create({
+                connection_id: connectionId,
+                model_id: m.id,
+                display_name: m.name,
+                supports_web_search: ws.supports,
+                web_search_options: ws.options,
                 last_checked_at: now,
                 input_price_per_million: pricing?.input || 0,
                 output_price_per_million: pricing?.output || 0,
                 pricing_source: pricing ? 'static' : '',
             });
         } else {
-            const update = {};
-            if (existing.display_name !== m.name) update.display_name = m.name;
-            if (ws.supports !== null && existing.supports_web_search !== ws.supports) {
+            const update = { display_name: m.name, last_checked_at: now };
+            if (ws.supports !== null) {
                 update.supports_web_search = ws.supports;
                 update.web_search_options = ws.options;
             }
             if ((!existing.input_price_per_million || existing.pricing_source !== 'manual') && pricing) {
-                if (existing.input_price_per_million !== pricing.input || existing.output_price_per_million !== pricing.output) {
-                    update.input_price_per_million = pricing.input;
-                    update.output_price_per_million = pricing.output;
-                    update.pricing_source = 'static';
-                }
+                update.input_price_per_million = pricing.input;
+                update.output_price_per_million = pricing.output;
+                update.pricing_source = 'static';
             }
-            if (Object.keys(update).length > 0) {
-                update.last_checked_at = now;
-                updatesNeeded.push({ id: existing.id, update });
-            }
+            await base44.entities.ModelCatalog.update(existing.id, update);
         }
     }
 
-    // BulkCreate new models in chunks of 25
-    for (let i = 0; i < newModels.length; i += 25) {
-        await safeEntityOp(() => base44.entities.ModelCatalog.bulkCreate(newModels.slice(i, i + 25)));
-        if (i + 25 < newModels.length) await sleep(600);
-    }
-
-    // Update only changed models with throttling
-    for (let i = 0; i < updatesNeeded.length; i++) {
-        await safeEntityOp(() => base44.entities.ModelCatalog.update(updatesNeeded[i].id, updatesNeeded[i].update));
-        if ((i + 1) % 5 === 0) await sleep(600);
-    }
-
-    return await safeEntityOp(() => base44.entities.ModelCatalog.filter({ connection_id: connectionId }));
+    return await base44.entities.ModelCatalog.filter({ connection_id: connectionId });
 }

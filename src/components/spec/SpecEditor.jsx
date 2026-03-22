@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle, ShieldAlert, Upload } from 'lucide-react';
+import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle, ShieldAlert } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -21,7 +21,6 @@ export default function SpecEditor() {
     const [activeTab, setActiveTab] = useState('edit');
     const [hasChanges, setHasChanges] = useState(false);
     const [isAdmin, setIsAdmin] = useState(false);
-    const [importingFile, setImportingFile] = useState(false);
 
     useEffect(() => {
         loadSpec();
@@ -35,22 +34,13 @@ export default function SpecEditor() {
         }
     }, [editedText, spec]);
 
-    const [specLoadError, setSpecLoadError] = useState(null);
-
     const loadSpec = async () => {
-        setSpecLoadError(null);
         try {
             const response = await base44.functions.invoke('specManager', { action: 'getActive' });
-            if (!response.data.spec) {
-                setSpecLoadError('No specification found. Create one by entering text below and saving.');
-            } else {
-                setSpec(response.data.spec);
-                setEditedText(response.data.spec?.current_text || '');
-            }
+            setSpec(response.data.spec);
+            setEditedText(response.data.spec?.current_text || '');
         } catch (error) {
-            const raw = error?.response?.data?.error || '';
-            const msg = raw || 'Could not load the specification. Check your connection and try again.';
-            setSpecLoadError(msg);
+            toast.error('Failed to load spec');
         } finally {
             setLoading(false);
         }
@@ -61,7 +51,7 @@ export default function SpecEditor() {
             const response = await base44.functions.invoke('specManager', { action: 'getVersions' });
             setVersions(response.data.versions || []);
         } catch (error) {
-            toast.error('Could not load version history.');
+            console.error('Failed to load versions:', error);
         }
     };
 
@@ -101,12 +91,10 @@ export default function SpecEditor() {
             setSpec(response.data.spec);
             setEditedText(response.data.spec?.current_text || '');
             setHasChanges(false);
-            setSpecLoadError(null);
             toast.success('Default spec restored');
             loadVersions();
         } catch (error) {
-            const msg = error?.response?.data?.error || 'Failed to restore default specification. Please try again.';
-            toast.error(msg);
+            toast.error('Failed to restore default');
         } finally {
             setSaving(false);
         }
@@ -116,74 +104,6 @@ export default function SpecEditor() {
         setEditedText(version.spec_text);
         setActiveTab('edit');
         toast.info(`Loaded version ${version.version_number}. Click Save to apply.`);
-    };
-
-    const handleImportFile = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        const name = file.name.toLowerCase();
-        const isPlainText = name.endsWith('.txt') || name.endsWith('.md');
-
-        const supportedExts = ['.txt', '.md', '.docx', '.pdf'];
-        if (!supportedExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
-            toast.error('Unsupported file type. Please upload a .txt, .md, .docx, or .pdf file.');
-            e.target.value = '';
-            return;
-        }
-
-        setImportingFile(true);
-        try {
-            if (isPlainText) {
-                const text = await file.text();
-                if (!text.trim()) {
-                    toast.error('The file is empty — no content to import.');
-                    return;
-                }
-                setEditedText(text);
-                setSpecLoadError(null);
-                setActiveTab('edit');
-                toast.success(`Loaded "${file.name}" into editor. Review and click Save to apply.`);
-            } else {
-                let file_url;
-                try {
-                    ({ file_url } = await base44.integrations.Core.UploadFile({ file }));
-                } catch (uploadErr) {
-                    toast.error('Could not upload the file. Check your connection and try again.');
-                    return;
-                }
-                const response = await base44.functions.invoke('specManager', {
-                    action: 'restoreFromFile',
-                    file_url,
-                });
-                const updatedSpec = response.data.spec;
-                if (!updatedSpec?.current_text) {
-                    toast.warning('The file was processed but no text content was extracted. The file may be empty or in an unsupported format.');
-                    return;
-                }
-                setSpec(updatedSpec);
-                setEditedText(updatedSpec.current_text);
-                setHasChanges(false);
-                setSpecLoadError(null);
-                setActiveTab('edit');
-                loadVersions();
-                toast.success(`Spec loaded from "${file.name}" and saved as a new version.`);
-            }
-        } catch (error) {
-            const raw = error?.response?.data?.error || '';
-            let msg;
-            if (/extract|parse|read/i.test(raw)) {
-                msg = `Could not read the file content. ${raw}`;
-            } else if (raw) {
-                msg = raw;
-            } else {
-                msg = 'Failed to import spec from file. The file may be corrupted or in an unsupported format.';
-            }
-            toast.error(msg);
-        } finally {
-            setImportingFile(false);
-            e.target.value = '';
-        }
     };
 
     if (loading) {
@@ -196,17 +116,6 @@ export default function SpecEditor() {
 
     return (
         <div className="space-y-6">
-            {specLoadError && (
-                <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
-                    <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-                    <div>
-                        <p className="text-sm font-medium text-red-800">{specLoadError}</p>
-                        <Button variant="link" size="sm" className="text-red-700 px-0 h-auto mt-1" onClick={() => { setLoading(true); loadSpec(); }}>
-                            Retry loading
-                        </Button>
-                    </div>
-                </div>
-            )}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <div>
@@ -288,38 +197,12 @@ export default function SpecEditor() {
                                         <Button
                                             variant="outline"
                                             onClick={handleRestoreDefault}
-                                            disabled={saving || importingFile}
+                                            disabled={saving}
                                             className="gap-2"
                                         >
                                             <RotateCcw className="w-4 h-4" />
                                             Restore Default
                                         </Button>
-                                        <div>
-                                            <input
-                                                type="file"
-                                                accept=".txt,.md,.docx,.pdf"
-                                                onChange={handleImportFile}
-                                                className="hidden"
-                                                id="spec-file-upload"
-                                            />
-                                            <label htmlFor="spec-file-upload">
-                                                <Button
-                                                    variant="outline"
-                                                    className="gap-2 cursor-pointer"
-                                                    disabled={saving || importingFile}
-                                                    asChild
-                                                >
-                                                    <span>
-                                                        {importingFile ? (
-                                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                                        ) : (
-                                                            <Upload className="w-4 h-4" />
-                                                        )}
-                                                        Load From File
-                                                    </span>
-                                                </Button>
-                                            </label>
-                                        </div>
                                     </div>
                                 )}
                             </div>

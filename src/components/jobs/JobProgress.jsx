@@ -9,15 +9,14 @@ import {
 import { toast } from 'sonner';
 
 const STATUS_CONFIG = {
-    queued:    { label: 'Queued',     color: 'text-amber-600',   bg: 'bg-amber-50 border-amber-200',   dot: 'bg-amber-400' },
-    running:   { label: 'Processing', color: 'text-blue-600',    bg: 'bg-blue-50 border-blue-200',     dot: 'bg-blue-500 animate-pulse' },
-    done:      { label: 'Completed',  color: 'text-green-700',   bg: 'bg-green-50 border-green-200',   dot: 'bg-green-500' },
-    error:     { label: 'Error',      color: 'text-red-600',     bg: 'bg-red-50 border-red-200',       dot: 'bg-red-500' },
-    paused:    { label: 'Paused',     color: 'text-slate-600',   bg: 'bg-slate-50 border-slate-200',   dot: 'bg-slate-400' },
-    cancelled: { label: 'Cancelled',  color: 'text-orange-600',  bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-400' },
+    queued:  { label: 'Queued',     color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200',  dot: 'bg-amber-400' },
+    running: { label: 'Processing', color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',    dot: 'bg-blue-500 animate-pulse' },
+    done:    { label: 'Completed',  color: 'text-green-700',  bg: 'bg-green-50 border-green-200',  dot: 'bg-green-500' },
+    error:   { label: 'Error',      color: 'text-red-600',    bg: 'bg-red-50 border-red-200',      dot: 'bg-red-500' },
+    paused:  { label: 'Paused',     color: 'text-slate-600',  bg: 'bg-slate-50 border-slate-200',  dot: 'bg-slate-400' },
 };
 
-export default function JobProgress({ jobId, onComplete, onStatusChange }) {
+export default function JobProgress({ jobId, onComplete }) {
     const [job, setJob] = useState(null);
     const [statusCounts, setStatusCounts] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -71,8 +70,7 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
         try {
             await base44.functions.invoke('jobProcessor', { action: 'resume', job_id: jobId });
             await loadJobStatus();
-            onStatusChange?.();
-            toast.success('Task resumed — processing will start shortly');
+            toast.success('Task resumed — server will continue processing shortly');
         } catch {
             toast.error('Failed to resume processing');
         } finally {
@@ -81,15 +79,14 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
     };
 
     const handleStop = async () => {
-        if (!confirm('Cancel this task? All pending and in-progress rows will be cancelled.')) return;
+        if (!confirm('Abort this task? All pending and in-progress rows will be cancelled and the job will be marked as aborted.')) return;
         setStopping(true);
         try {
             await base44.functions.invoke('jobProcessor', { action: 'stop', job_id: jobId });
-            toast.success('Task cancelled');
+            toast.success('Task aborted');
             await loadJobStatus();
-            onStatusChange?.();
         } catch {
-            toast.error('Failed to cancel task');
+            toast.error('Failed to stop task');
         } finally {
             setStopping(false);
         }
@@ -101,7 +98,6 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
             await base44.functions.invoke('jobProcessor', { action: 'pause', job_id: jobId });
             toast.success('Task paused');
             await loadJobStatus();
-            onStatusChange?.();
         } catch {
             toast.error('Failed to pause task');
         } finally {
@@ -151,7 +147,7 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
     const isActive = job.status === 'queued' || job.status === 'running';
     const actualProcessed = statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows;
     const progress = job.total_rows > 0 ? Math.round((actualProcessed / job.total_rows) * 100) : 0;
-    const canResume = (job.status === 'error' || job.status === 'paused' || job.status === 'cancelled') && (statusCounts?.pending > 0 || statusCounts?.cancelled > 0);
+    const canResume = (job.status === 'error' || job.status === 'paused') && statusCounts?.pending > 0;
     const canDownload = job.status === 'done' || actualProcessed > 0;
 
     return (
@@ -181,7 +177,7 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
 
             {/* Row counts */}
             {statusCounts && (
-                <div className={`grid gap-2 ${statusCounts.cancelled > 0 ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                <div className="grid grid-cols-4 gap-2">
                     <div className="text-center p-2 rounded-lg bg-slate-50">
                         <p className="text-base font-bold text-slate-500">{statusCounts.pending}</p>
                         <p className="text-xs text-slate-400 mt-0.5">Pending</p>
@@ -198,12 +194,6 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
                         <p className="text-base font-bold text-red-500">{statusCounts.error}</p>
                         <p className="text-xs text-slate-400 mt-0.5">Errors</p>
                     </div>
-                    {statusCounts.cancelled > 0 && (
-                        <div className="text-center p-2 rounded-lg bg-orange-50">
-                            <p className="text-base font-bold text-orange-500">{statusCounts.cancelled}</p>
-                            <p className="text-xs text-slate-400 mt-0.5">Cancelled</p>
-                        </div>
-                    )}
                 </div>
             )}
 
@@ -232,25 +222,19 @@ export default function JobProgress({ jobId, onComplete, onStatusChange }) {
                 )}
             </div>
 
-            {/* Error / cancellation message */}
-            {job.error_message && (job.status === 'error' || job.status === 'cancelled') && (
-                <div className={`flex items-start gap-2 p-3 rounded-lg border ${job.status === 'cancelled' ? 'bg-orange-50 border-orange-100' : 'bg-red-50 border-red-100'}`}>
-                    <AlertCircle className={`w-4 h-4 mt-0.5 shrink-0 ${job.status === 'cancelled' ? 'text-orange-500' : 'text-red-500'}`} />
-                    <p className={`text-xs leading-relaxed ${job.status === 'cancelled' ? 'text-orange-700' : 'text-red-700'}`}>{job.error_message}</p>
+            {/* Error message */}
+            {job.error_message && job.status === 'error' && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 rounded-lg border border-red-100">
+                    <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-700 leading-relaxed">{job.error_message}</p>
                 </div>
             )}
 
             {/* Server notice */}
-            {job.status === 'queued' && (
-                <div className="flex items-center gap-2 text-xs text-amber-600">
-                    <Clock className="w-3.5 h-3.5 shrink-0" />
-                    <span>Queued — server will pick up automatically</span>
-                </div>
-            )}
-            {job.status === 'running' && (
+            {isActive && (
                 <div className="flex items-center gap-2 text-xs text-slate-500">
-                    <Server className="w-3.5 h-3.5 shrink-0" />
-                    <span>Processing server-side — safe to close this tab</span>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>Processing on server — safe to close this tab</span>
                 </div>
             )}
 

@@ -199,7 +199,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                         <div className="flex items-center gap-1 text-green-600">
                                             <CheckCircle className="w-4 h-4" />
                                             <span className="text-sm">
-                                                Native search — structured source URLs
+                                                Auto-enabled
                                                 {webSearchOptions.length > 0 && (
                                                     <span className="text-slate-400 ml-1">({webSearchOptions.join(', ')})</span>
                                                 )}
@@ -207,23 +207,11 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                         </div>
                                     ) : selectedModelData?.supports_web_search === false ? (
                                         <div className="flex items-center gap-1 text-red-500">
-                                            <XCircle className="w-4 h-4" />
-                                            <span className="text-sm">
-                                                {providerType === 'openai_compatible'
-                                                    ? 'Not available (generic OpenAI-compatible provider)'
-                                                    : providerType === 'groq' || providerType === 'together' || providerType === 'mistral'
-                                                        ? `Not available on ${PROVIDER_LABELS[providerType] || providerType}`
-                                                        : 'Not supported for this model'}
-                                            </span>
+                                            <XCircle className="w-4 h-4" /><span className="text-sm">Not supported</span>
                                         </div>
                                     ) : (
                                         <div className="flex items-center gap-1 text-amber-500">
-                                            <HelpCircle className="w-4 h-4" />
-                                            <span className="text-sm">
-                                                {providerType === 'openai_compatible'
-                                                    ? 'Unknown — custom deployment/model alias not recognized'
-                                                    : `Unknown for ${PROVIDER_LABELS[providerType] || providerType || 'this provider'}`}
-                                            </span>
+                                            <HelpCircle className="w-4 h-4" /><span className="text-sm">Unknown for this provider</span>
                                         </div>
                                     )}
                                 </div>
@@ -242,23 +230,14 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                 <SelectTrigger><SelectValue placeholder="Select web search option..." /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">None (disable web search)</SelectItem>
-                                    {webSearchOptions.map((opt) => {
-                                        const labels = {
-                                            'builtin': 'Built-in Web Search (Perplexity)',
-                                            'web_search_preview': 'Native Web Search (OpenAI Responses API)',
-                                            'web_search': 'Web Search (Anthropic Tool)',
-                                            'google_search': 'Google Search (Gemini Grounding)',
-                                            'kimi_web_search': 'Web Search (Kimi Server-Side)',
-                                        };
-                                        return (
-                                            <SelectItem key={opt} value={opt}>
-                                                {labels[opt] || opt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                            </SelectItem>
-                                        );
-                                    })}
+                                    {webSearchOptions.map((opt) => (
+                                        <SelectItem key={opt} value={opt}>
+                                            {opt === 'builtin' ? 'Built-in Web Search' : opt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                        </SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-400">Native web search auto-enabled. Only structured tool-returned URLs count as verified sources.</p>
+                            <p className="text-xs text-slate-400">Web search was auto-enabled because this model supports it. You can disable it here.</p>
                         </div>
                     )}
 
@@ -269,11 +248,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                 <SelectTrigger className="opacity-50"><SelectValue placeholder="Not available for this model" /></SelectTrigger>
                                 <SelectContent><SelectItem value="none">Not available</SelectItem></SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-500">
-                            {providerType === 'openai_compatible'
-                                ? 'Web search requires a native provider connection (OpenAI, Anthropic, Google, Perplexity)'
-                                : 'This model does not support web search tools on this provider'}
-                        </p>
+                            <p className="text-xs text-slate-500">This model doesn't support web search tools</p>
                         </div>
                     )}
                 </div>

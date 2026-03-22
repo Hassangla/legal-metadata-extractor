@@ -1,5 +1,5 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
-// ═══ AUTHORITATIVE RUNTIME — single source of truth for URL provenance, search handling, source selection, and job processing. No other file should duplicate these helpers. ═══
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+
 const BATCH_SIZE=3,MAX_RETRIES=3,RETRY_BASE_MS=2000,ENTITY_RETRY_ATTEMPTS=5,ENTITY_RETRY_BASE_MS=500,ENTITY_CREATE_CHUNK_SIZE=50;
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 const isRateLimitError=(err)=>/rate.?limit|429|too many requests/i.test(String(err?.message||err||''));
@@ -122,18 +122,11 @@ function parseKimiToolCallsFromText(text) {
 }
 
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
-// Pattern-based: automatically covers gpt-5, gpt-5.x, gpt-6, and future models.
-const OPENAI_RESPONSES_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
-const OPENAI_WEBSEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
+const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini']);
+const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano']);
 
-function isOpenAIResponsesModel(modelId) {
-    const id = (modelId || '').toLowerCase();
-    return OPENAI_RESPONSES_PREFIXES.some(p => id === p || id.startsWith(p + '-') || id.startsWith(p + '.') || id.startsWith(p + ' '));
-}
-function isOpenAIWebSearchModel(modelId) {
-    const id = (modelId || '').toLowerCase();
-    return OPENAI_WEBSEARCH_PREFIXES.some(p => id === p || id.startsWith(p + '-') || id.startsWith(p + '.') || id.startsWith(p + ' '));
-}
+function isOpenAIResponsesModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_RESPONSES_MODELS.has(id)||[...OPENAI_RESPONSES_MODELS].some(a=>id.startsWith(a+'-')); }
+function isOpenAIWebSearchModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_WEBSEARCH_MODELS.has(id)||[...OPENAI_WEBSEARCH_MODELS].some(a=>id.startsWith(a+'-')); }
 
 // ── ENCRYPTION ──────────────────────────────────────────────
 
@@ -223,7 +216,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
         // Path B: Allowlisted models → Responses API + web_search tool
         // Strict gate: only use Responses API for verified models
         if (cfg.responsesUrl && isOpenAIWebSearchModel(modelId)) {
-            const isReasoningModel = /^(o1|o3|o4|gpt-5)/.test(id);
+            const isOSeries = /^(o1|o3|o4)/.test(id);
             const body = {
                 model: modelId,
                 instructions: systemPrompt,
@@ -232,7 +225,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
                 max_output_tokens: 16384,
                 store: false,
             };
-            if (!isReasoningModel) { body.temperature = 0; }
+            if (!isOSeries) { body.temperature = 0; }
             return {
                 url: cfg.responsesUrl(baseUrl),
                 init: { method: 'POST', headers: cfg.authHeaders(apiKey), body: JSON.stringify(body) },
@@ -249,7 +242,7 @@ function buildLLMRequest(providerType, modelId, systemPrompt, userPrompt, webSea
     //   - O-series (o1, o3, o4): no temperature, use max_completion_tokens
     //   - Kimi k-series: only temperature=1 is allowed
     const stdId = (modelId || '').toLowerCase();
-    const isReasoningModel = /^(o1|o3|o4|gpt-5)/.test(stdId);
+    const isReasoningModel = /^(o1|o3|o4)/.test(stdId);
     const isKimiModel = stdId.includes('kimi') || stdId.includes('moonshot');
 
     const body = {
@@ -473,8 +466,6 @@ function collectUrlsDeep(value, out) {
     }
 }
 
-// PROVENANCE: Extract URLs ONLY from structured tool outputs (annotations, citations, grounding).
-// Model plain-text content is NEVER parsed here — that is intentional and critical.
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     const urls = [];
     // OpenAI Responses API: annotations on output_text parts + web_search_call payloads
@@ -549,12 +540,14 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
         }
     }
 
-    // Kimi / OpenAI-compatible: capture URLs from structured tool call arguments ONLY
-    // (not from assistant plain-text content — that would be model-typed, not tool-returned)
+    // Kimi / OpenAI-compatible: capture URLs from tool call arguments and assistant text
     if (Array.isArray(msg?.tool_calls)) {
         for (const tc of msg.tool_calls) {
             collectUrlsDeep(tc.function?.arguments, urls);
         }
+    }
+    if (typeof msg?.content === 'string') {
+        for (const u of extractUrlsFromText(msg.content)) urls.push(u);
     }
 
     // Some OpenAI/compatible responses include top-level citations
@@ -713,8 +706,6 @@ async function verifyCandidateUrls(candidates, maxCheck) {
 }
 function parseUrlList(raw) { if (!raw) return []; if (Array.isArray(raw)) return raw.map(u=>u.trim()).filter(Boolean); return String(raw).split(/[,;\n]+/).map(u=>u.trim()).filter(u=>u.startsWith('http')); }
 function urlInList(url, list) { if (!url||!list) return false; const n=url.replace(/\/+$/,'').toLowerCase(); return parseUrlList(list).some(i=>i.replace(/\/+$/,'').toLowerCase()===n); }
-function isWblUrl(url) { try { const u=new URL(url); const h=u.hostname.toLowerCase(); if(h==='wbl.worldbank.org')return true; if((h==='worldbank.org'||h.endsWith('.worldbank.org'))&&/\/wbl\b/i.test(u.pathname))return true; return false; } catch(_) { return false; } }
-function findBestNonWblUrl(ev, toolUrls) { const score=(u)=>/\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u)?1:/faolex|natlex|ilo\.org|wipo\.int/i.test(u)?2:4; const toolSet=new Set((toolUrls||[]).map(u=>u.replace(/\/+$/,'').toLowerCase())); const isTool=(u)=>toolSet.size===0||toolSet.has(u.replace(/\/+$/,'').toLowerCase()); const all=[...new Set([...parseUrlList(ev.Selected_Source_URLs),...parseUrlList(ev.URLs_Considered),...(toolUrls||[])])].filter(u=>u&&!isWblUrl(u)&&isTool(u)); if(!all.length)return null; all.sort((a,b)=>score(a)-score(b)); return all[0]; }
 
 const ARTICLE_REFERENCE_REGEXES = [/\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,/\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,/\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi];
 
@@ -841,15 +832,22 @@ async function finalizeAndVerify(ev, ctx) {
         addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
     }
 
-    // ── (A0) TOOL URL PROVENANCE enforcement (strict: only structured tool-returned URLs) ──
-    // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls).
-    // Model-typed URLs (from prose/evidence text) are never accepted here.
+    // ── (A0) TOOL URL PROVENANCE enforcement ──
+    // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls)
+    // to prove it came from real search results, not model hallucination.
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const normalizedFinal = ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase();
         const inToolUrls = (ctx.toolUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
-        if (!inToolUrls) {
-            addReason(`URL provenance violation: "${ev.Final_Instrument_URL}" not in tool-returned URLs (${(ctx.toolUrls||[]).length}). Blanked.`);
+        const inEvidenceDerived = (ctx.evidenceDerivedVerifiedUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
+        if (!inToolUrls && !inEvidenceDerived) {
+            addReason(
+                `URL not found in server-observed URL sets; blanked server-side. ` +
+                `Final_Instrument_URL "${ev.Final_Instrument_URL}" was not in tool-derived URLs (${(ctx.toolUrls || []).length}) ` +
+                `or verified evidence-derived URLs (${(ctx.evidenceDerivedVerifiedUrls || []).length}).`
+            );
             ev.Final_Instrument_URL = '';
+        } else if (inEvidenceDerived && !inToolUrls) {
+            addReason('Using evidence-derived verified URL (no structured tool URL captured for this row).');
         }
     }
 
@@ -868,19 +866,21 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
-    // ── (A1) WBL EXCLUSION — hard server-side block for wbl.worldbank.org ──
-    if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) { const bk=ev.Final_Instrument_URL,alt=findBestNonWblUrl(ev,ctx.toolUrls); if(alt){ev.Final_Instrument_URL=alt;console.log(`[WBL-BLOCK] row=${ctx.row_index} Replaced WBL "${bk}" → "${alt}"`);addReason(`WBL exclusion: replaced "${bk}" with trusted alternative "${alt}".`);}else{ev.Final_Instrument_URL='';console.log(`[WBL-BLOCK] row=${ctx.row_index} Blanked WBL "${bk}" — no alternative`);addReason(`WBL exclusion: blanked "${bk}" (wbl.worldbank.org). No trusted alternative found.`);} }
-    // ── (B) MINIMUM VERIFICATION — verify URL loads. Alternates restricted to tool-proven URLs. ──
+    // ── (B) MINIMUM VERIFICATION — verify the URL loads ──
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const loads = await verifyUrlLoads(ev.Final_Instrument_URL);
-        if (loads) { ev.Final_Public = 'Yes'; }
+        if (loads) {
+            ev.Final_Public = 'Yes';
+        }
         if (!loads) {
-            const _ts=new Set((ctx.toolUrls||[]).map(u=>u.replace(/\/+$/,'').toLowerCase()));
-            const alternates = parseUrlList(ev.Selected_Source_URLs).filter(u => u.replace(/\/+$/, '').toLowerCase() !== ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase());
+            // Try alternate URLs from Selected_Source_URLs
+            const alternates = parseUrlList(ev.Selected_Source_URLs)
+                .filter(u => u.replace(/\/+$/, '').toLowerCase() !== ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase());
+
             let found = false;
             for (const alt of alternates) {
+                // Each alternate must also be in URLs_Considered
                 if (!urlInList(alt, ev.URLs_Considered)) continue;
-                if (_ts.size>0&&!_ts.has(alt.replace(/\/+$/,'').toLowerCase())) continue;
                 const altLoads = await verifyUrlLoads(alt);
                 if (altLoads) {
                     addReason(
@@ -905,10 +905,15 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
-    // ── (A1-POST) WBL re-check after step B URL substitution ──
-    if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) { console.log(`[WBL-BLOCK] row=${ctx.row_index} Post-verify caught WBL "${ev.Final_Instrument_URL}"`); addReason(`WBL exclusion (post-verify): blanked "${ev.Final_Instrument_URL}".`); ev.Final_Instrument_URL=''; }
-    // Tier 5 hard-stop re-enforcement (prevent later steps from repopulating restricted fields)
-    if (isTier5) { for (const f of ['Final_Enactment_Date','Final_Date_of_Entry_in_Force','Final_Repeal_Year','Final_Current_Status','Final_Public']) ev[f]=''; ev.Final_Flag='Tier 5'; }
+    // Tier 5 hard-stop enforcement (run again at the end to prevent later steps from repopulating restricted fields)
+    if (isTier5) {
+        ev.Final_Enactment_Date = '';
+        ev.Final_Date_of_Entry_in_Force = '';
+        ev.Final_Repeal_Year = '';
+        ev.Final_Current_Status = '';
+        ev.Final_Public = '';
+        ev.Final_Flag = 'Tier 5';
+    }
 
     // ── (C2) SILENT TOOL FAILURE: web search enabled but no tool URLs observed ──
     // If the provider was supposed to search but returned zero tool URLs,
@@ -1034,7 +1039,9 @@ async function finalizeAndVerify(ev, ctx) {
     ev.Economy_Code = ctx.economyCode;
     ev.Legal_basis_verbatim = ctx.legalBasis;
 
-    if (!ctx.economyCode) { addReason(`Economy code missing: "${ctx.economy}" not found (strict exact match). Add it in Settings → Economy Codes.`); }
+    if (!ctx.economyCode) {
+        addReason('Economy code not found in lookup table.');
+    }
 
     // ── (E) Normalize Missing/Conflict_Reason field naming ──
     // Merge any pre-existing reason with new notes
@@ -1052,8 +1059,9 @@ const PORTUGUESE_SPEAKING_ECONOMIES = new Set(['brazil','brasil','portugal','ang
 function isPortugueseSpeakingEconomy(e){if(!e)return false;const n=e.toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();return PORTUGUESE_SPEAKING_ECONOMIES.has(n)||PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim());}
 function hasPortugueseMarkers(t){return!!t&&(/\bLei\b/i.test(t)||/\bPortaria\b/i.test(t)||/\bResolu[cç][aã]o\b/i.test(t)||/\bDecreto-?Lei\b/i.test(t)||/[ãõ]/.test(t)||/ção\b/i.test(t));}
 
-// Economy resolution: STRICT exact normalized match only. No aliases, no fuzzy/synonym substitution.
-function resolveEconomyCode(raw,map){const k=(raw||'').trim().replace(/\s+/g,' ').toLowerCase();if(!k)return{code:'',ecoAlias:null,ecoAliasTarget:null};if(map[k])return{code:map[k],ecoAlias:null,ecoAliasTarget:null};return{code:'',ecoAlias:null,ecoAliasTarget:null};}
+// ── ECONOMY ALIASES ─────────────────────────────────────────
+const ECONOMY_ALIASES = {"ivory coast":"Côte d'Ivoire","cote divoire":"Côte d'Ivoire","cote d ivoire":"Côte d'Ivoire","south korea":"Korea, Rep.","republic of korea":"Korea, Rep.","north korea":"Korea, Dem. People's Rep.","democratic republic of the congo":"Congo, Dem. Rep.","drc":"Congo, Dem. Rep.","republic of congo":"Congo, Rep.","czech republic":"Czechia","swaziland":"Eswatini","burma":"Myanmar","holland":"Netherlands","usa":"United States","united states of america":"United States","uk":"United Kingdom","great britain":"United Kingdom","russia":"Russian Federation","iran":"Iran, Islamic Rep.","syria":"Syrian Arab Republic","venezuela":"Venezuela, RB","egypt":"Egypt, Arab Rep.","yemen":"Yemen, Rep.","laos":"Lao PDR","slovakia":"Slovak Republic","macedonia":"North Macedonia","cape verde":"Cabo Verde","east timor":"Timor-Leste","gambia":"Gambia, The","bahamas":"Bahamas, The","taiwan":"Taiwan, China","hong kong":"Hong Kong SAR, China","macau":"Macao SAR, China","macao":"Macao SAR, China","palestine":"West Bank and Gaza","brunei":"Brunei Darussalam","micronesia":"Micronesia, Fed. Sts.","vietnam":"Viet Nam","kyrgyzstan":"Kyrgyz Republic","st. lucia":"St. Lucia","saint lucia":"St. Lucia","st. kitts":"St. Kitts and Nevis","saint kitts":"St. Kitts and Nevis","st. vincent":"St. Vincent and the Grenadines","saint vincent":"St. Vincent and the Grenadines"};
+
 // ── MODEL PRICING (per million tokens) ──────────────────────
 const MODEL_PRICING = {
     'gpt-4o':{input:2.50,output:10.00},'gpt-4o-mini':{input:0.15,output:0.60},'gpt-4o-search-preview':{input:2.50,output:10.00},
@@ -1068,7 +1076,6 @@ const MODEL_PRICING = {
     'moonshot-v1-auto':{input:0.55,output:0.55},'moonshot-v1-8k':{input:0.17,output:0.17},'moonshot-v1-32k':{input:0.33,output:0.33},
     'moonshot-v1-128k':{input:0.83,output:0.83},'kimi-latest':{input:0.55,output:0.55},
     'deepseek-chat':{input:0.14,output:0.28},'deepseek-reasoner':{input:0.55,output:2.19},
-    'gpt-5':{input:2.00,output:8.00},'gpt-5-mini':{input:0.40,output:1.60},'gpt-5-nano':{input:0.10,output:0.40},'gpt-5.1':{input:2.00,output:8.00},'gpt-5.2':{input:2.00,output:8.00},'gpt-5.2-pro':{input:15.00,output:60.00},'gpt-5.4':{input:2.00,output:8.00},'gpt-5.4-mini':{input:0.40,output:1.60},'gpt-5.4-nano':{input:0.10,output:0.40},'gpt-5.4-pro':{input:15.00,output:60.00},
     'sonar':{input:1.00,output:1.00},'sonar-pro':{input:3.00,output:15.00},'sonar-reasoning':{input:1.00,output:5.00},'sonar-reasoning-pro':{input:2.00,output:8.00},
     'grok-3':{input:3.00,output:15.00},'grok-3-mini':{input:0.30,output:0.50},'grok-2':{input:2.00,output:10.00},
     'mistral-large':{input:2.00,output:6.00},'mistral-small':{input:0.10,output:0.30},
@@ -1086,20 +1093,10 @@ function estimateCostFromTable(modelId, inTok, outTok) {
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
-        const body = await req.json();
-        const { action, _service_call, ...params } = body;
+        const user = await base44.auth.me();
+        if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-        // For internal service-role calls (from processQueuedJobs scheduler),
-        // skip user auth check on the 'process' action only.
-        let user = null;
-        if (_service_call && action === 'process') {
-            // Service-role call — no user session needed.
-            // The scheduler already authenticated via service role.
-            user = { email: '_scheduler_', role: 'admin', full_name: 'Queue Scheduler' };
-        } else {
-            user = await base44.auth.me();
-            if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        const { action, ...params } = await req.json();
 
         switch (action) {
 
@@ -1152,25 +1149,26 @@ Deno.serve(async (req) => {
                     }
                 }
 
-                // Best-effort kickoff: try to start processing immediately
-                // so jobs don't wait for the next scheduler tick.
-                try {
-                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                } catch (_) { /* non-fatal — scheduler will pick it up */ }
-
                 return Response.json({ job });
             }
 
             case 'process': {
                 const { job_id } = params;
-                const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
-                const isJobActive = async () => { const j = (await withEntityRetry(() => base44.entities.Job.filter({ id: job_id })))[0]; return j && !TERMINAL_STATUSES.has(j.status) && j.status !== 'paused'; };
                 const jobs = await base44.entities.Job.filter({ id: job_id });
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
+
                 const job = jobs[0];
-                if (TERMINAL_STATUSES.has(job.status)) return Response.json({ job, message: `Job already ${job.status}` });
-                if (job.status === 'paused') return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
+                if (job.status === 'done') {
+                    return Response.json({ job, message: 'Job already completed' });
+                }
+                if (job.status === 'paused') {
+                    return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
+                }
+
+                // Wrap entire processing in try-catch so fatal errors set job to 'error'
+                // instead of leaving it stuck in 'running'.
                 try {
+
                 await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running' }));
 
                 const connections = await withEntityRetry(() => base44.entities.APIConnection.filter({ id: job.connection_id }));
@@ -1208,6 +1206,7 @@ Deno.serve(async (req) => {
                     console.error('Failed to load economy codes (non-fatal):', ecoErr.message);
                 }
 
+                // Look up stored model pricing from ModelCatalog
                 let modelInputPrice = 0;
                 let modelOutputPrice = 0;
                 try {
@@ -1221,6 +1220,9 @@ Deno.serve(async (req) => {
                     }
                 } catch (_) {}
 
+                // Use smaller batch size when web search is enabled to avoid serverless timeout.
+                // Web search calls take 10-20s each; with batch=5 that's 50-100s which exceeds
+                // typical serverless timeouts (30-60s).
                 const hasWebSearch = job.web_search_choice && job.web_search_choice !== 'none';
                 const effectiveBatchSize = hasWebSearch ? 2 : BATCH_SIZE;
 
@@ -1244,14 +1246,12 @@ Deno.serve(async (req) => {
 
                 for (const row of pendingRows) {
                     if (processedCount > 0) await interRowDelay();
-                    if (!(await isJobActive())) { console.log(`[process] Job ${job_id} no longer active — exiting.`); break; }
-                    const freshRow = (await withEntityRetry(() => base44.entities.JobRow.filter({ id: row.id })))[0];
-                    if (freshRow?.status === 'cancelled' || freshRow?.status === 'done') continue;
                     try {
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
-                        const {code:economyCode} = resolveEconomyCode(input.Economy, economyMap);
-                        if(!economyCode) console.log(`[ECON] row=${row.row_index} No exact match: "${input.Economy}"`);
+                        const rawEconomy = (input.Economy || '').toLowerCase().trim();
+                        const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
+                        const economyCode = economyMap[rawEconomy] || economyMap[resolvedEconomy] || '';
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
@@ -1274,7 +1274,11 @@ Deno.serve(async (req) => {
                         const searchChoiceCompatible = effectiveWebSearch !== 'none';
                         const hasRealWebSearch = effectiveWebSearch !== 'none';
 
-                        // Kimi thinking models need extra JSON reminder.
+                        // No spec override — the controlling spec's TOOL-DEPENDENT rules apply.
+                        // If web search is unavailable, we enforce blank fields server-side after the LLM call.
+
+                        // Kimi thinking models tend to narrate their search process instead of
+                        // outputting JSON. Add an extra-strong reminder for these models.
                         const isKimiThinking = (job.model_id || '').toLowerCase().includes('kimi') && 
                             ((job.model_id || '').toLowerCase().includes('think') || (job.model_id || '').toLowerCase().includes('k2'));
 
@@ -1334,13 +1338,6 @@ AFTER SEARCHING — follow these steps:
 8. CRITICAL: For Final_Instrument_Published_Name: if Final_Language_Doc is French or Spanish ONLY, keep the normalized original-language title as-is — DO NOT translate to English. IMPORTANT: Portuguese is NOT Spanish and is NOT exempt from translation — Portuguese instruments MUST have an English Published Name. For all other languages (including Portuguese, Arabic, German, Slovenian, etc.), provide an English name.
 9. Record all evidence and reasoning.
 10. Set Source_Tier to the tier number of your best source.
-
-WBL EXCLUSION RULE — MANDATORY:
-- URLs from https://wbl.worldbank.org/ (Women, Business and the Law) must NEVER be used as Final_Instrument_URL. WBL is a secondary index, not a primary legal source.
-- If your search results include a WBL page, treat it ONLY as a lead: extract the law name/number mentioned on the WBL page and perform ADDITIONAL searches to find the actual instrument on an official or reliable source.
-- Preferred alternative sources (in priority order): official government portals (.gov, parliament, gazette, legislation portals), FAOLEX, NATLEX, WIPO, ILO, or similar reliable legal databases.
-- You MUST continue searching until you find an acceptable non-WBL source. Do NOT stop at the WBL result.
-- If after exhaustive searching no acceptable alternative source exists, leave Final_Instrument_URL as an empty string "" rather than using a WBL URL.
 
 CRITICAL: URLs_Considered and Selected_Source_URLs MUST NOT be empty if you performed searches. Copy the URLs from your search results into these fields.`;
                         } else {
@@ -1416,12 +1413,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             providerType, job.model_id, systemPrompt, userPrompt,
                             effectiveWebSearch, conn.base_url, apiKey
                         );
-                        console.log(`[DIAG] row=${row.row_index} apiPath=${isResponsesApi ? 'responses' : 'chat'} effectiveSearch=${effectiveWebSearch} provider=${providerType} model=${job.model_id}`);
 
                         let data;
                         let inputTokens = 0;
                         let outputTokens = 0;
 
+                        // Kimi uses an echo-based tool-call loop: the client echoes
+                        // $web_search arguments back, and Moonshot's server performs
+                        // the actual search on the next round-trip.
                         const isKimiSearch = effectiveWebSearch === 'kimi_web_search';
 
                         let kimiObservedToolUrls = [];
@@ -1440,7 +1439,14 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 throw new Error(`Responses API failed: ${JSON.stringify(data.error || data.incomplete_details || 'unknown').slice(0, 300)}`);
                             }
 
-                    
+                            // Diagnostic: log Responses API structure to understand web search behavior
+                            if (isResponsesApi) {
+                                const outputTypes = Array.isArray(data.output) ? data.output.map(i => `${i.type}${i.status ? ':' + i.status : ''}`).join(', ') : 'no-output';
+                                console.log(`[DIAG] Responses API row=${row.row_index}: status=${data.status}, output_types=[${outputTypes}], has_output_text=${!!data.output_text}`);
+                                // Log the request URL and whether tools were sent
+                                const reqBody = JSON.parse(init.body);
+                                console.log(`[DIAG] Request: model=${reqBody.model}, tools=${JSON.stringify(reqBody.tools)}, url=${url}`);
+                            }
 
                             if (data.usage) {
                                 inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
@@ -1479,13 +1485,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const searchWasRequested = requestedWebSearch !== 'none';
                         const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
-                        // STRICT PROVENANCE: searchActuallyWorked requires structured tool URLs,
-                        // not just a search signal. A search call that returns zero URLs is not
-                        // evidence of successful search — model-typed dates/status must not survive.
                         let searchActuallyWorked = hasRealWebSearch;
 
                         console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
 
+                        // ── KIMI RETRY: if kimi_web_search selected but no tool calls observed,
+                        // do one retry with an explicit instruction to call $web_search ──
                         if (searchActuallyWorked && effectiveWebSearch === 'kimi_web_search'
                             && toolUrls.length === 0 && !kimiObservedToolCalls && !toolError) {
                             try {
@@ -1516,18 +1521,21 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
-                        // NOTE: We intentionally do NOT extract URLs from model plain-text content
-                        // into toolUrls. Only structured tool-returned URLs are trusted provenance.
+                        // Downgrade search availability if tool silently failed or returned no URLs.
+                        // Kimi can execute $web_search without exposing URL citations in every response,
+                        // so treat observed server-side tool calls as valid search execution.
+                        // For Kimi: if we observed tool calls during the echo loop, trust that search worked
+                        // even if the final response doesn't have tool_calls in it.
+                        //
+                        // ALSO: for Responses API, check if the model's text content mentions URLs
+                        // even if extractToolUrlsFromResponse didn't find structured ones.
                         if (searchActuallyWorked && toolUrls.length === 0 && content) {
                             const contentUrls = extractUrlsFromText(content);
-                            if (contentUrls.length > 0) {
-                                console.log(`[DIAG] row=${row.row_index} IGNORED ${contentUrls.length} model-typed URL(s) from plain text (not tool-returned): ${contentUrls.slice(0,3).join(', ')}`);
+                            for (const u of contentUrls) {
+                                if (isSafeHttpUrl(u) && !toolUrls.includes(u)) toolUrls.push(u);
                             }
                         }
-                        // STRICT: search only counts if structured tool URLs were returned.
-                        // Search signal alone (tool invoked, 0 URLs) is insufficient provenance.
-                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
-                            if (sawSearchSignal && !toolUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Search tool invoked but 0 URLs — demoting to no-search.`);
+                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal && !sawServerToolCall))) {
                             searchActuallyWorked = false;
                         }
 
@@ -1610,7 +1618,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                     Economy_Code: economyCode,
                                     Legal_basis_verbatim: legalBasis,
                                     Query_1: query1, Query_2: query2, Query_3: query3,
-                                    URLs_Considered: toolUrls.join('; '),
+                                    URLs_Considered: extractUrlsFromText(content || '').join('; '),
                                     Selected_Source_URLs: '',
                                     Source_Tier: '',
                                     Public_Access: '',
@@ -1661,41 +1669,46 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             }
                         }
 
-                        // ── TOOL-PROVENANCE GATE: only structured tool-returned URLs are trusted ──
-                        // When toolUrls exist, backfill empty fields from them and strip any
-                        // model-typed URLs that lack tool provenance.
-                        // When toolUrls are empty, ALL URL fields are blanked (fail closed).
-                        const evidenceDerivedVerifiedUrls = [];
-                        if (parsed?.evidence) {
-                            if (toolUrls.length > 0) {
-                                const urlsStr = toolUrls.join('; ');
-                                if (!(parsed.evidence.URLs_Considered || '').trim()) parsed.evidence.URLs_Considered = urlsStr;
-                                if (!(parsed.evidence.Selected_Source_URLs || '').trim()) parsed.evidence.Selected_Source_URLs = urlsStr;
-                                if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
-                                    const nonWbl = toolUrls.filter(u => !isWblUrl(u));
-                                    const govUrl = nonWbl.find(u => /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u));
-                                    const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|wipo\.int/i.test(u));
-                                    parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || nonWbl[0] || '';
+                        // ── INJECT TOOL URLs INTO EVIDENCE ──
+                        // When the provider actually performed web search (toolUrls > 0) but the
+                        // model left evidence URL fields empty (common with Responses API where
+                        // URLs are in annotations, not in the model's JSON), inject them so
+                        // provenance/closed-set checks can pass.
+                        if (toolUrls.length > 0 && parsed?.evidence) {
+                            const urlsStr = toolUrls.join('; ');
+                            if (!(parsed.evidence.URLs_Considered || '').trim()) {
+                                parsed.evidence.URLs_Considered = urlsStr;
+                            }
+                            if (!(parsed.evidence.Selected_Source_URLs || '').trim()) {
+                                parsed.evidence.Selected_Source_URLs = urlsStr;
+                            }
+                            if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
+                                // Pick the best URL: prefer .gov / official-looking URLs first
+                                const govUrl = toolUrls.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                const legalDbUrl = toolUrls.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
+                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || toolUrls[0];
+                            }
+                            // If Source_Tier is empty, infer from the URL we selected
+                            if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
+                                const finalUrl = parsed.evidence.Final_Instrument_URL.toLowerCase();
+                                if (/\.gov|\.go\.|parliament|gazette|official|legislation/i.test(finalUrl)) {
+                                    parsed.evidence.Source_Tier = '1';
+                                } else if (/faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(finalUrl)) {
+                                    parsed.evidence.Source_Tier = '2';
+                                } else {
+                                    parsed.evidence.Source_Tier = '3';
                                 }
-                                if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
-                                    const fu = parsed.evidence.Final_Instrument_URL.toLowerCase();
-                                    // Exclude WBL from Tier 2 — only non-WBL worldbank pages qualify
-                                    parsed.evidence.Source_Tier = /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(fu) ? '1' : /faolex|natlex|ilo\.org|wipo\.int/i.test(fu) ? '2' : '3';
-                                }
-                                // PROVENANCE FILTER: strip any URL not in the tool-returned set
-                                const toolSet = new Set(toolUrls.map(u => u.replace(/\/+$/, '').toLowerCase()));
-                                const isTool = (u) => toolSet.has(u.replace(/\/+$/, '').toLowerCase());
-                                const filterField = (v) => { if (!v) return ''; const kept = parseUrlList(v).filter(isTool), dropped = parseUrlList(v).filter(u => !isTool(u)); if (dropped.length) console.log(`[PROVENANCE] row=${row.row_index} stripped ${dropped.length} non-tool URL(s): ${dropped.slice(0,3).join(', ')}`); return kept.join('; '); };
-                                parsed.evidence.URLs_Considered = filterField(parsed.evidence.URLs_Considered);
-                                parsed.evidence.Selected_Source_URLs = filterField(parsed.evidence.Selected_Source_URLs);
-                                const fiu = (parsed.evidence.Final_Instrument_URL || '').trim();
-                                if (fiu && !isTool(fiu)) { console.log(`[PROVENANCE] row=${row.row_index} stripped Final_Instrument_URL (no tool provenance): ${fiu}`); parsed.evidence.Final_Instrument_URL = ''; }
-                            } else {
-                                // FAIL CLOSED: zero tool URLs → blank ALL trusted URL fields unconditionally.
-                                // This covers both search-requested (silent tool failure) and no-search runs.
-                                const modelUrls = extractEvidenceDerivedUrls(parsed.evidence);
-                                if (modelUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Discarded ${modelUrls.length} model-typed URL(s) (0 tool URLs): ${modelUrls.slice(0,3).join(', ')}`);
-                                parsed.evidence.URLs_Considered = ''; parsed.evidence.Selected_Source_URLs = ''; parsed.evidence.Final_Instrument_URL = '';
+                            }
+                        }
+
+                        // If structured tool URL extraction found none, try evidence-derived URLs.
+                        // These are lower confidence than tool-derived URLs and are marked separately.
+                        let evidenceDerivedVerifiedUrls = [];
+                        if (searchWasRequested && toolUrls.length === 0 && parsed?.evidence) {
+                            const evidenceDerivedCandidates = extractEvidenceDerivedUrls(parsed.evidence);
+                            evidenceDerivedVerifiedUrls = await verifyCandidateUrls(evidenceDerivedCandidates, 8);
+                            if (evidenceDerivedVerifiedUrls.length > 0) {
+                                searchActuallyWorked = true;
                             }
                         }
 
@@ -1734,6 +1747,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             Flag: ev.Final_Flag || '',
                         };
 
+                        // Build raw output: include both parsed content and raw API response structure
                         let rawOutput = '=== EXTRACTED CONTENT ===\n' + (content || '') + '\n\n';
                         if (isResponsesApi && Array.isArray(data?.output)) {
                             rawOutput += '=== RAW RESPONSES API OUTPUT ===\n' + JSON.stringify(data.output, null, 2).slice(0, 30000);
@@ -1756,19 +1770,22 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     }
                 }
 
-                // Re-fetch before final update to avoid overwriting cancelled/paused
-                const fj = (await withEntityRetry(() => base44.entities.Job.filter({ id: job_id })))[0];
-                if (fj && (TERMINAL_STATUSES.has(fj.status) || fj.status === 'paused')) {
-                    return Response.json({ job: fj, processed_this_batch: processedCount, remaining: 0 });
-                }
-                const newProcessedRows = Math.min((fj?.processed_rows || job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
+                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
                 const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
                 const newStatus = pendingLeft <= 0 ? 'done' : 'running';
-                const totalInputTokens = (fj?.total_input_tokens || job.total_input_tokens || 0) + batchInputTokens;
-                const totalOutputTokens = (fj?.total_output_tokens || job.total_output_tokens || 0) + batchOutputTokens;
-                const updatePayload = { processed_rows: newProcessedRows, status: newStatus, progress_json: { ...(fj?.progress_json || job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount }, total_input_tokens: totalInputTokens, total_output_tokens: totalOutputTokens };
+                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
+                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
+                const updatePayload = {
+                    processed_rows: newProcessedRows,
+                    status: newStatus,
+                    progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount },
+                    total_input_tokens: totalInputTokens,
+                    total_output_tokens: totalOutputTokens,
+                };
                 if (totalInputTokens > 0 || totalOutputTokens > 0) {
-                    updatePayload.estimated_cost_usd = modelInputPrice > 0 ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens) : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
+                    updatePayload.estimated_cost_usd = modelInputPrice > 0
+                        ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens)
+                        : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
                 }
                 const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
                 return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
@@ -1777,10 +1794,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
                     const retryable = isRateLimitError(fatalErr);
                     try {
-                        const fck = (await base44.entities.Job.filter({ id: job_id }))[0];
-                        if (fck && (fck.status === 'cancelled' || fck.status === 'paused')) { /* respect user action */ }
-                        else if (retryable) { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` })); }
-                        else { await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) })); }
+                        if (retryable) {
+                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', error_message: `Rate limited. Safe to retry. ${new Date().toISOString()}` }));
+                        } else {
+                            await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: fatalMsg.slice(0, 500) }));
+                        }
                     } catch (_) {}
                     return Response.json({ error: fatalMsg, retryable }, { status: retryable ? 429 : 500 });
                 }
@@ -1800,10 +1818,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0)),
                 ]);
                 const p = pendingRows.length, er = errorRows.length;
-                const cancelledRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'cancelled' }, 'row_index', 5000, 0));
-                const cn = cancelledRows.length;
-                const pr = (job.status === 'done' || job.status === 'paused' || job.status === 'cancelled') ? 0 : processingRows.length;
-                const statusCounts = { pending: p, processing: pr, error: er, cancelled: cn, done: Math.max(0, (job.total_rows || 0) - p - pr - er - cn) };
+                // If job is done, treat any stuck 'processing' rows as done
+                const pr = (job.status === 'done' || job.status === 'paused') ? 0 : processingRows.length;
+                const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
                 return Response.json({ job, statusCounts });
             }
 
@@ -1882,11 +1899,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                     await sleep(200);
                 }
 
-                // Best-effort kickoff after rerun
-                try {
-                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                } catch (_) { /* non-fatal */ }
-
                 return Response.json({ job: newJob });
             }
 
@@ -1929,20 +1941,19 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 const stopJobs = await base44.entities.Job.filter({ id: job_id });
                 if (!stopJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 const stopJob = stopJobs[0];
-                if (stopJob.status === 'cancelled') return Response.json({ success: true, stopped: 0 });
-                if (stopJob.status !== 'running' && stopJob.status !== 'queued') return Response.json({ error: 'Job is not active' }, { status: 400 });
-                // Set cancelled FIRST so concurrent processor sees it immediately
-                const cancelledAt = new Date().toISOString();
-                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'cancelled', error_message: `Cancelled by user at ${cancelledAt}`, cancelled_at: cancelledAt }));
+                if (stopJob.status !== 'running' && stopJob.status !== 'queued') return Response.json({ error: 'Job is not running' }, { status: 400 });
                 const [rowsToStop, processingRows2] = await Promise.all([
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)),
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
                 ]);
                 let stopped = 0;
                 for (const row of [...rowsToStop, ...processingRows2]) {
-                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'cancelled', error_message: 'Cancelled by user' }));
+                    await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'error', error_message: 'Aborted by user' }));
                     stopped++;
                 }
+                const stopInTok = stopJob.total_input_tokens || 0;
+                const stopOutTok = stopJob.total_output_tokens || 0;
+                await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'error', error_message: `Aborted by user. ${stopped} rows skipped.`, total_input_tokens: stopInTok, total_output_tokens: stopOutTok, estimated_cost_usd: stopJob.estimated_cost_usd || estimateCostFromTable(stopJob.model_id, stopInTok, stopOutTok) }));
                 return Response.json({ success: true, stopped });
             }
 
@@ -1952,21 +1963,11 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                 if (!resumeJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 const resumeJob = resumeJobs[0];
                 if (resumeJob.status === 'done') return Response.json({ error: 'Job is already completed' }, { status: 400 });
-                // For cancelled jobs, re-mark cancelled rows as pending
-                if (resumeJob.status === 'cancelled') {
-                    const cRows = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'cancelled' }, 'row_index', 5000, 0, ['id']));
-                    for (const r of cRows) await withEntityRetry(() => base44.entities.JobRow.update(r.id, { status: 'pending', error_message: '' }));
-                }
-                const actualPending = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0, ['id']));
-                if (!actualPending.length) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const rp = resumeJob.progress_json || {};
-                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', cancelled_at: '', progress_json: { ...rp, pending: actualPending.length, processing: 0 } }));
-
-                // Best-effort kickoff after resume
-                try {
-                    base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                } catch (_) { /* non-fatal */ }
-
+                const rDone = Number(rp.done || 0), rErr = Number(rp.error || 0), rProc = Number(rp.processing || 0);
+                const rPending = typeof rp.pending === 'number' ? rp.pending : Math.max((resumeJob.total_rows || 0) - rDone - rErr - rProc, 0);
+                if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
+                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
                 return Response.json({ job: updatedResumeJob });
             }
 

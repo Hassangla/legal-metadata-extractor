@@ -76,10 +76,9 @@ export default function NewRun() {
                 task_name: taskName
             });
 
-            const newJobId = response.data.job.id;
-            setCreatedJobId(newJobId);
+            setCreatedJobId(response.data.job.id);
             setStep(4);
-            toast.success('Job created — processing will start shortly');
+            toast.success('Job created successfully');
         } catch (error) {
             toast.error('Failed to create job');
         } finally {

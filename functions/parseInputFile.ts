@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 import * as XLSX from 'npm:xlsx@0.18.5';
 
 Deno.serve(async (req) => {
@@ -29,25 +29,17 @@ Deno.serve(async (req) => {
             response = await fetch(file_url);
         } catch (fetchError) {
             return Response.json({
-                error: `Could not download file. Network error: ${fetchError.message}. Check the URL and try uploading again.`
-            }, { status: 400 });
+                error: `Could not download file. Network error: ${fetchError.message}`
+            }, { status: 500 });
         }
 
         if (!response.ok) {
-            const status = response.status;
             return Response.json({
-                error: `Could not download file (HTTP ${status}). ${status === 404 ? 'File not found — ' : ''}The upload URL may have expired — try uploading again.`
-            }, { status: 400 });
+                error: `Could not download file (HTTP ${response.status}). The upload URL may have expired — try uploading again.`
+            }, { status: 500 });
         }
 
-        let arrayBuffer;
-        try {
-            arrayBuffer = await response.arrayBuffer();
-        } catch (dlError) {
-            return Response.json({
-                error: `File download interrupted: ${dlError.message}. Try uploading again.`
-            }, { status: 400 });
-        }
+        const arrayBuffer = await response.arrayBuffer();
 
         if (arrayBuffer.byteLength === 0) {
             return Response.json({ error: 'The uploaded file is empty (0 bytes).' }, { status: 400 });
@@ -161,8 +153,7 @@ Deno.serve(async (req) => {
             for (const summary of sheetSummaries) {
                 if (summary.rows === 0 || summary.columns.length === 0) continue;
                 const ws = workbook.Sheets[summary.name];
-                let sheetData;
-                try { sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' }); } catch (_) { continue; }
+                const sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' });
                 let filled = 0;
                 let total = 0;
                 for (const row of sheetData) {
@@ -260,13 +251,8 @@ Deno.serve(async (req) => {
         });
 
     } catch (error) {
-        const msg = error?.message || String(error);
-        // Classify known workbook/data errors as 400 instead of 500
-        const isDataError = /sheet|workbook|xlsx|header|column|row|parse|range|cell|buffer|arraybuffer/i.test(msg);
         return Response.json({
-            error: isDataError
-                ? `File processing error: ${msg}. Check that the file is a valid Excel workbook.`
-                : `Unexpected error: ${msg}`
-        }, { status: isDataError ? 400 : 500 });
+            error: `Unexpected error: ${error.message}`
+        }, { status: 500 });
     }
 });

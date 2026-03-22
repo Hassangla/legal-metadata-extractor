@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign, RefreshCw, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
 
 import ConnectionManager from '@/components/connections/ConnectionManager';
@@ -26,7 +26,6 @@ export default function Settings() {
     const [editingId, setEditingId] = useState(null);
     const [editEconomy, setEditEconomy] = useState('');
     const [editCode, setEditCode] = useState('');
-    const [refreshingModels, setRefreshingModels] = useState(false);
 
     useEffect(() => {
         base44.auth.me().then(u => setUser(u)).catch(() => {});
@@ -35,17 +34,12 @@ export default function Settings() {
 
     const isAdmin = user?.role === 'admin';
 
-    const [loadError, setLoadError] = useState(null);
-
     const loadEconomyCodes = async () => {
-        setLoadError(null);
         try {
             const response = await base44.functions.invoke('economyCodes', { action: 'list' });
             setEconomyCodes(response.data.codes || []);
         } catch (error) {
-            const msg = error?.response?.data?.error || 'Could not load economy codes. Check your connection and try again.';
-            setLoadError(msg);
-            toast.error(msg);
+            console.error('Failed to load economy codes:', error);
         } finally {
             setLoading(false);
         }
@@ -55,73 +49,53 @@ export default function Settings() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        const name = file.name.toLowerCase();
-        const supportedTypes = ['.csv', '.xlsx', '.xls'];
-        if (!supportedTypes.some(ext => name.endsWith(ext))) {
-            toast.error(`Unsupported file type. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file.`);
-            e.target.value = '';
-            return;
-        }
-
         setImporting(true);
         try {
-            const { file_url } = await base44.integrations.Core.UploadFile({ file });
-            const response = await base44.functions.invoke('economyCodes', {
-                action: 'importFromFile',
-                file_url,
-                file_name: file.name,
-            });
-            const d = response.data;
-            if ((d.imported || 0) === 0 && (d.updated || 0) === 0 && (d.total || 0) > 0) {
-                toast.info(`No changes — all ${d.total} rows already matched existing records.`);
-            } else if ((d.total || 0) === 0) {
-                toast.warning('File contained no valid rows. Make sure it has "economy" and "economy_code" columns with data.');
+            const name = file.name.toLowerCase();
+
+            if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+                const { file_url } = await base44.integrations.Core.UploadFile({ file });
+                const response = await base44.functions.invoke('economyCodes', {
+                    action: 'importFromFile',
+                    file_url,
+                    file_name: file.name
+                });
+                toast.success(`Imported ${response.data.imported} new, updated ${response.data.updated}, skipped ${response.data.skipped} unchanged`);
             } else {
-                toast.success(`Imported ${d.imported} new, updated ${d.updated}, skipped ${d.skipped} unchanged (${d.total} rows total)`);
+                const text = await file.text();
+                const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+                if (lines.length < 2) {
+                    toast.error('File is empty or has no data rows');
+                    return;
+                }
+
+                const delimiter = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
+                const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+                const economyIdx = headers.findIndex(h => ['economy', 'economy_name', 'name', 'country', 'country_name'].includes(h));
+                const codeIdx = headers.findIndex(h => ['economy_code', 'code', 'iso_code', 'iso3', 'country_code'].includes(h));
+
+                if (economyIdx === -1 || codeIdx === -1) {
+                    toast.error('File must have "economy" and "economy_code" columns');
+                    return;
+                }
+
+                const data = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const values = lines[i].split(delimiter).map(v => v.trim().replace(/^["']|["']$/g, ''));
+                    if (values[economyIdx] && values[codeIdx]) {
+                        data.push({ economy: values[economyIdx], economy_code: values[codeIdx] });
+                    }
+                }
+
+                const response = await base44.functions.invoke('economyCodes', {
+                    action: 'import',
+                    data
+                });
+                toast.success(`Imported ${response.data.imported} new, updated ${response.data.updated}, skipped ${response.data.skipped} unchanged`);
             }
             loadEconomyCodes();
         } catch (error) {
-            const data = error?.response?.data;
-            const raw = data?.error || data?.message || data?.details || '';
-            const rowErrors = data?.row_errors || data?.rowErrors || data?.write_errors || [];
-            const rowWarnings = data?.row_warnings || [];
-
-            let msg;
-            if (/header|column/i.test(raw)) {
-                msg = `Missing required columns: the file needs "economy" and "economy_code" headers. ${raw}`;
-            } else if (/empty/i.test(raw)) {
-                msg = `The file appears to be empty. ${raw}`;
-            } else if (/unsupported|format/i.test(raw)) {
-                msg = `Unsupported file format. Upload a CSV or Excel file. ${raw}`;
-            } else if (raw) {
-                msg = raw;
-            } else {
-                msg = 'Import failed — could not process the file. Please check the format and try again.';
-            }
-
-            // Append row-level error summary if available
-            if (rowErrors.length > 0) {
-                const preview = rowErrors.slice(0, 3).map(e => {
-                    const row = e.row ?? e.row_index ?? '?';
-                    const reason = e.error || e.message || 'unknown error';
-                    return `Row ${row}: ${reason}`;
-                }).join('; ');
-                const extra = rowErrors.length > 3 ? ` (+${rowErrors.length - 3} more)` : '';
-                msg += `\n${preview}${extra}`;
-            }
-
-            // Surface row warnings as a secondary toast
-            if (rowWarnings.length > 0) {
-                const warnPreview = rowWarnings.slice(0, 3).map(w => {
-                    const row = w.row ?? w.row_index ?? '?';
-                    const reason = w.warning || w.message || 'check data';
-                    return `Row ${row}: ${reason}`;
-                }).join('; ');
-                const warnExtra = rowWarnings.length > 3 ? ` (+${rowWarnings.length - 3} more)` : '';
-                toast.warning(`Import warnings: ${warnPreview}${warnExtra}`);
-            }
-
-            toast.error(msg);
+            toast.error(error?.response?.data?.error || 'Failed to import');
         } finally {
             setImporting(false);
             e.target.value = '';
@@ -157,35 +131,6 @@ export default function Settings() {
             loadEconomyCodes();
         } catch (error) {
             toast.error('Failed to update');
-        }
-    };
-
-    const handleRefreshAllModels = async () => {
-        setRefreshingModels(true);
-        try {
-            const listResp = await base44.functions.invoke('apiConnections', { action: 'refreshAllModels' });
-            const connections = listResp.data?.connections || [];
-            const results = [];
-            for (const conn of connections) {
-                try {
-                    const r = await base44.functions.invoke('apiConnections', { action: 'fetchModels', connection_id: conn.id });
-                    results.push({ name: conn.name, success: true, model_count: r.data?.models?.length || 0 });
-                } catch (e) {
-                    results.push({ name: conn.name, success: false });
-                }
-            }
-            const succeeded = results.filter(r => r.success);
-            const failed = results.filter(r => !r.success);
-            const totalModels = succeeded.reduce((sum, r) => sum + (r.model_count || 0), 0);
-            if (failed.length > 0) {
-                toast.warning(`Refreshed ${succeeded.length}/${results.length} connections (${totalModels} models). ${failed.length} failed.`);
-            } else {
-                toast.success(`Refreshed all ${results.length} connections — ${totalModels} models updated`);
-            }
-        } catch (error) {
-            toast.error('Failed to refresh models');
-        } finally {
-            setRefreshingModels(false);
         }
     };
 
@@ -250,21 +195,6 @@ export default function Settings() {
                         <TabsContent value="connections">
                             <Card>
                                 <CardContent className="pt-6">
-                                    <div className="flex items-center justify-between mb-6">
-                                        <div>
-                                            <h3 className="text-lg font-semibold text-slate-900">API Connections</h3>
-                                            <p className="text-sm text-slate-500">Manage your AI provider connections</p>
-                                        </div>
-                                        <Button
-                                            variant="outline"
-                                            onClick={handleRefreshAllModels}
-                                            disabled={refreshingModels}
-                                            className="gap-2"
-                                        >
-                                            {refreshingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                            {refreshingModels ? 'Refreshing...' : 'Refresh All Models'}
-                                        </Button>
-                                    </div>
                                     <ConnectionManager />
                                 </CardContent>
                             </Card>
@@ -327,15 +257,6 @@ export default function Settings() {
                                 {loading ? (
                                     <div className="flex items-center justify-center py-8">
                                         <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-                                    </div>
-                                ) : loadError ? (
-                                    <div className="text-center py-12">
-                                        <AlertCircle className="w-12 h-12 text-red-300 mx-auto mb-4" />
-                                        <p className="text-red-600 font-medium mb-2">Failed to load economy codes</p>
-                                        <p className="text-sm text-slate-500 mb-4">{loadError}</p>
-                                        <Button variant="outline" size="sm" onClick={() => { setLoading(true); loadEconomyCodes(); }}>
-                                            Retry
-                                        </Button>
                                     </div>
                                 ) : economyCodes.length === 0 ? (
                                     <div className="text-center py-12">
