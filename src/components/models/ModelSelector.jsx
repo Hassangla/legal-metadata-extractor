@@ -199,7 +199,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                         <div className="flex items-center gap-1 text-green-600">
                                             <CheckCircle className="w-4 h-4" />
                                             <span className="text-sm">
-                                                Auto-enabled
+                                                Native search — structured source URLs
                                                 {webSearchOptions.length > 0 && (
                                                     <span className="text-slate-400 ml-1">({webSearchOptions.join(', ')})</span>
                                                 )}
