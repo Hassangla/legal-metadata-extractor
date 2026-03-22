@@ -123,8 +123,8 @@ function parseKimiToolCallsFromText(text) {
 
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
 // Pattern-based: automatically covers gpt-5, gpt-5.x, gpt-6, and future models.
-const OPENAI_RESPONSES_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
-const OPENAI_WEBSEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
+const OPENAI_RESPONSES_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
+const OPENAI_WEBSEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
 
 function isOpenAIResponsesModel(modelId) {
     const id = (modelId || '').toLowerCase();
