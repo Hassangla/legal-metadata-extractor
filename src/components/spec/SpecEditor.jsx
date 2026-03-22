@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle, ShieldAlert } from 'lucide-react';
+import { Save, RotateCcw, History, FileText, Loader2, Check, AlertCircle, ShieldAlert, Upload } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -21,6 +21,7 @@ export default function SpecEditor() {
     const [activeTab, setActiveTab] = useState('edit');
     const [hasChanges, setHasChanges] = useState(false);
     const [isAdmin, setIsAdmin] = useState(false);
+    const [importingFile, setImportingFile] = useState(false);
 
     useEffect(() => {
         loadSpec();
@@ -197,12 +198,38 @@ export default function SpecEditor() {
                                         <Button
                                             variant="outline"
                                             onClick={handleRestoreDefault}
-                                            disabled={saving}
+                                            disabled={saving || importingFile}
                                             className="gap-2"
                                         >
                                             <RotateCcw className="w-4 h-4" />
                                             Restore Default
                                         </Button>
+                                        <div>
+                                            <input
+                                                type="file"
+                                                accept=".txt,.md,.docx,.pdf"
+                                                onChange={handleImportFile}
+                                                className="hidden"
+                                                id="spec-file-upload"
+                                            />
+                                            <label htmlFor="spec-file-upload">
+                                                <Button
+                                                    variant="outline"
+                                                    className="gap-2 cursor-pointer"
+                                                    disabled={saving || importingFile}
+                                                    asChild
+                                                >
+                                                    <span>
+                                                        {importingFile ? (
+                                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                                        ) : (
+                                                            <Upload className="w-4 h-4" />
+                                                        )}
+                                                        Load From File
+                                                    </span>
+                                                </Button>
+                                            </label>
+                                        </div>
                                     </div>
                                 )}
                             </div>
