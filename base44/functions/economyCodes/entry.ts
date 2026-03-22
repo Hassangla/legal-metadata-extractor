@@ -458,6 +458,13 @@ Deno.serve(async (req) => {
                 return Response.json({ error: 'Unknown action' }, { status: 400 });
         }
     } catch (error) {
-        return Response.json({ error: error.message }, { status: 500 });
+        const msg = error?.message || String(error);
+        // Classify known data/file/entity errors as 400 to avoid generic 500s
+        const isDataError = /sheet|workbook|xlsx|csv|header|column|row|parse|empty|economy|code|duplicate|required|missing/i.test(msg);
+        return Response.json({
+            error: isDataError
+                ? `Import error: ${msg}`
+                : `Unexpected error: ${msg}`
+        }, { status: isDataError ? 400 : 500 });
     }
 });
