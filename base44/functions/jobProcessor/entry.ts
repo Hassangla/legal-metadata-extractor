@@ -1038,8 +1038,7 @@ async function finalizeAndVerify(ev, ctx) {
     ev.Economy_Code = ctx.economyCode;
     ev.Legal_basis_verbatim = ctx.legalBasis;
 
-    if (!ctx.economyCode) { addReason(ctx.ecoAliasTarget?`Economy code missing: "${ctx.economy}" aliased→"${ctx.ecoAliasTarget}" but not in table. Add in Settings.`:`Economy code missing: "${ctx.economy}" not found. Add in Settings → Economy Codes.`); }
-    else if (ctx.ecoAlias) { addReason(`Economy alias: "${ctx.economy}"→"${ctx.ecoAliasTarget}" (code: ${ctx.economyCode}). Consider adding "${ctx.economy}" directly.`); }
+    if (!ctx.economyCode) { addReason(`Economy code missing: "${ctx.economy}" not found (strict exact match). Add it in Settings → Economy Codes.`); }
 
     // ── (E) Normalize Missing/Conflict_Reason field naming ──
     // Merge any pre-existing reason with new notes
