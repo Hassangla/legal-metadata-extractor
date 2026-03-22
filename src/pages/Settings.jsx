@@ -81,7 +81,11 @@ export default function Settings() {
             }
             loadEconomyCodes();
         } catch (error) {
-            const raw = error?.response?.data?.error || '';
+            const data = error?.response?.data;
+            const raw = data?.error || data?.message || data?.details || '';
+            const rowErrors = data?.row_errors || data?.rowErrors || data?.write_errors || [];
+            const rowWarnings = data?.row_warnings || [];
+
             let msg;
             if (/header|column/i.test(raw)) {
                 msg = `Missing required columns: the file needs "economy" and "economy_code" headers. ${raw}`;
@@ -94,6 +98,29 @@ export default function Settings() {
             } else {
                 msg = 'Import failed — could not process the file. Please check the format and try again.';
             }
+
+            // Append row-level error summary if available
+            if (rowErrors.length > 0) {
+                const preview = rowErrors.slice(0, 3).map(e => {
+                    const row = e.row ?? e.row_index ?? '?';
+                    const reason = e.error || e.message || 'unknown error';
+                    return `Row ${row}: ${reason}`;
+                }).join('; ');
+                const extra = rowErrors.length > 3 ? ` (+${rowErrors.length - 3} more)` : '';
+                msg += `\n${preview}${extra}`;
+            }
+
+            // Surface row warnings as a secondary toast
+            if (rowWarnings.length > 0) {
+                const warnPreview = rowWarnings.slice(0, 3).map(w => {
+                    const row = w.row ?? w.row_index ?? '?';
+                    const reason = w.warning || w.message || 'check data';
+                    return `Row ${row}: ${reason}`;
+                }).join('; ');
+                const warnExtra = rowWarnings.length > 3 ? ` (+${rowWarnings.length - 3} more)` : '';
+                toast.warning(`Import warnings: ${warnPreview}${warnExtra}`);
+            }
+
             toast.error(msg);
         } finally {
             setImporting(false);
