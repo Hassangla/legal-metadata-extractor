@@ -839,22 +839,15 @@ async function finalizeAndVerify(ev, ctx) {
         addReason('Tier 5 source — dates/status blanked and Flag set to "Tier 5" per spec.');
     }
 
-    // ── (A0) TOOL URL PROVENANCE enforcement ──
-    // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls)
-    // to prove it came from real search results, not model hallucination.
+    // ── (A0) TOOL URL PROVENANCE enforcement (strict: only structured tool-returned URLs) ──
+    // Final_Instrument_URL must appear in the actual tool-returned URL set (ctx.toolUrls).
+    // Model-typed URLs (from prose/evidence text) are never accepted here.
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const normalizedFinal = ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase();
         const inToolUrls = (ctx.toolUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
-        const inEvidenceDerived = (ctx.evidenceDerivedVerifiedUrls || []).some(u => u.replace(/\/+$/, '').toLowerCase() === normalizedFinal);
-        if (!inToolUrls && !inEvidenceDerived) {
-            addReason(
-                `URL not found in server-observed URL sets; blanked server-side. ` +
-                `Final_Instrument_URL "${ev.Final_Instrument_URL}" was not in tool-derived URLs (${(ctx.toolUrls || []).length}) ` +
-                `or verified evidence-derived URLs (${(ctx.evidenceDerivedVerifiedUrls || []).length}).`
-            );
+        if (!inToolUrls) {
+            addReason(`URL provenance violation: "${ev.Final_Instrument_URL}" not in tool-returned URLs (${(ctx.toolUrls||[]).length}). Blanked.`);
             ev.Final_Instrument_URL = '';
-        } else if (inEvidenceDerived && !inToolUrls) {
-            addReason('Using evidence-derived verified URL (no structured tool URL captured for this row).');
         }
     }
 
