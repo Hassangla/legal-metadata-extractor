@@ -29,17 +29,25 @@ Deno.serve(async (req) => {
             response = await fetch(file_url);
         } catch (fetchError) {
             return Response.json({
-                error: `Could not download file. Network error: ${fetchError.message}`
-            }, { status: 500 });
+                error: `Could not download file. Network error: ${fetchError.message}. Check the URL and try uploading again.`
+            }, { status: 400 });
         }
 
         if (!response.ok) {
+            const status = response.status;
             return Response.json({
-                error: `Could not download file (HTTP ${response.status}). The upload URL may have expired — try uploading again.`
-            }, { status: 500 });
+                error: `Could not download file (HTTP ${status}). ${status === 404 ? 'File not found — ' : ''}The upload URL may have expired — try uploading again.`
+            }, { status: 400 });
         }
 
-        const arrayBuffer = await response.arrayBuffer();
+        let arrayBuffer;
+        try {
+            arrayBuffer = await response.arrayBuffer();
+        } catch (dlError) {
+            return Response.json({
+                error: `File download interrupted: ${dlError.message}. Try uploading again.`
+            }, { status: 400 });
+        }
 
         if (arrayBuffer.byteLength === 0) {
             return Response.json({ error: 'The uploaded file is empty (0 bytes).' }, { status: 400 });
