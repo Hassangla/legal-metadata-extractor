@@ -1519,10 +1519,12 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             } catch (_) { /* non-fatal retry */ }
                         }
 
+                        // NOTE: We intentionally do NOT extract URLs from model plain-text content
+                        // into toolUrls. Only structured tool-returned URLs are trusted provenance.
                         if (searchActuallyWorked && toolUrls.length === 0 && content) {
                             const contentUrls = extractUrlsFromText(content);
-                            for (const u of contentUrls) {
-                                if (isSafeHttpUrl(u) && !toolUrls.includes(u)) toolUrls.push(u);
+                            if (contentUrls.length > 0) {
+                                console.log(`[DIAG] row=${row.row_index} IGNORED ${contentUrls.length} model-typed URL(s) from plain text (not tool-returned): ${contentUrls.slice(0,3).join(', ')}`);
                             }
                         }
                         if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal && !sawServerToolCall))) {
