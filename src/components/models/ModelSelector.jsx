@@ -258,7 +258,7 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                     })}
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-slate-400">Web search was auto-enabled because this model supports it. You can disable it here.</p>
+                            <p className="text-xs text-slate-400">Native web search auto-enabled. Only structured tool-returned URLs count as verified sources.</p>
                         </div>
                     )}
 
