@@ -1705,7 +1705,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             evidenceDerivedVerifiedUrls,
                             row_index: row.row_index,
                             economy: input.Economy,
-                            economyCode, ecoAlias, ecoAliasTarget,
+                            economyCode,
                             legalBasis,
                             requestedWebSearch,
                             searchChoiceCompatible,
