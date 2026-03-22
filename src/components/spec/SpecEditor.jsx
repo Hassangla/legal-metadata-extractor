@@ -107,6 +107,49 @@ export default function SpecEditor() {
         toast.info(`Loaded version ${version.version_number}. Click Save to apply.`);
     };
 
+    const handleImportFile = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const name = file.name.toLowerCase();
+        const isPlainText = name.endsWith('.txt') || name.endsWith('.md');
+
+        setImportingFile(true);
+        try {
+            if (isPlainText) {
+                // Plain text files: read directly in the browser, load into editor
+                const text = await file.text();
+                if (!text.trim()) {
+                    toast.error('File is empty');
+                    return;
+                }
+                setEditedText(text);
+                setActiveTab('edit');
+                toast.success(`Loaded "${file.name}" into editor. Review and click Save to apply.`);
+            } else {
+                // Binary files (docx, pdf): upload and extract via backend
+                const { file_url } = await base44.integrations.Core.UploadFile({ file });
+                const response = await base44.functions.invoke('specManager', {
+                    action: 'restoreFromFile',
+                    file_url,
+                });
+                const updatedSpec = response.data.spec;
+                setSpec(updatedSpec);
+                setEditedText(updatedSpec?.current_text || '');
+                setHasChanges(false);
+                setActiveTab('edit');
+                loadVersions();
+                toast.success(`Spec loaded from "${file.name}" and saved as a new version.`);
+            }
+        } catch (error) {
+            const msg = error?.response?.data?.error || 'Failed to import spec from file';
+            toast.error(msg);
+        } finally {
+            setImportingFile(false);
+            e.target.value = '';
+        }
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-64">
