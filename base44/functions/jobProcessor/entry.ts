@@ -867,11 +867,7 @@ async function finalizeAndVerify(ev, ctx) {
     }
 
     // ── (A1) WBL EXCLUSION — hard server-side block for wbl.worldbank.org ──
-    if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) {
-        const blockedUrl = ev.Final_Instrument_URL; const alt = findBestNonWblUrl(ev, ctx.toolUrls);
-        if (alt) { ev.Final_Instrument_URL = alt; console.log(`[WBL-BLOCK] row=${ctx.row_index} Replaced WBL "${blockedUrl}" → "${alt}"`); addReason(`WBL exclusion: replaced "${blockedUrl}" with non-WBL alternative "${alt}".`); }
-        else { ev.Final_Instrument_URL = ''; console.log(`[WBL-BLOCK] row=${ctx.row_index} Blanked WBL "${blockedUrl}" — no alternative`); addReason(`WBL exclusion: blanked "${blockedUrl}" (wbl.worldbank.org not acceptable). No alternative found.`); }
-    }
+    if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) { const bk=ev.Final_Instrument_URL,alt=findBestNonWblUrl(ev,ctx.toolUrls); if(alt){ev.Final_Instrument_URL=alt;console.log(`[WBL-BLOCK] row=${ctx.row_index} Replaced WBL "${bk}" → "${alt}"`);addReason(`WBL exclusion: replaced "${bk}" with trusted alternative "${alt}".`);}else{ev.Final_Instrument_URL='';console.log(`[WBL-BLOCK] row=${ctx.row_index} Blanked WBL "${bk}" — no alternative`);addReason(`WBL exclusion: blanked "${bk}" (wbl.worldbank.org). No trusted alternative found.`);} }
     // ── (B) MINIMUM VERIFICATION — verify the URL loads ──
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const loads = await verifyUrlLoads(ev.Final_Instrument_URL);
