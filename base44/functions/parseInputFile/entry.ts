@@ -161,7 +161,8 @@ Deno.serve(async (req) => {
             for (const summary of sheetSummaries) {
                 if (summary.rows === 0 || summary.columns.length === 0) continue;
                 const ws = workbook.Sheets[summary.name];
-                const sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                let sheetData;
+                try { sheetData = XLSX.utils.sheet_to_json(ws, { defval: '' }); } catch (_) { continue; }
                 let filled = 0;
                 let total = 0;
                 for (const row of sheetData) {
