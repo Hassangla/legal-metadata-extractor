@@ -242,11 +242,20 @@ export default function ModelSelector({ connectionId, selectedModel, onSelectMod
                                 <SelectTrigger><SelectValue placeholder="Select web search option..." /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">None (disable web search)</SelectItem>
-                                    {webSearchOptions.map((opt) => (
-                                        <SelectItem key={opt} value={opt}>
-                                            {opt === 'builtin' ? 'Built-in Web Search' : opt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                        </SelectItem>
-                                    ))}
+                                    {webSearchOptions.map((opt) => {
+                                        const labels = {
+                                            'builtin': 'Built-in Web Search (Perplexity)',
+                                            'web_search_preview': 'Native Web Search (OpenAI Responses API)',
+                                            'web_search': 'Web Search (Anthropic Tool)',
+                                            'google_search': 'Google Search (Gemini Grounding)',
+                                            'kimi_web_search': 'Web Search (Kimi Server-Side)',
+                                        };
+                                        return (
+                                            <SelectItem key={opt} value={opt}>
+                                                {labels[opt] || opt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                            </SelectItem>
+                                        );
+                                    })}
                                 </SelectContent>
                             </Select>
                             <p className="text-xs text-slate-400">Web search was auto-enabled because this model supports it. You can disable it here.</p>
