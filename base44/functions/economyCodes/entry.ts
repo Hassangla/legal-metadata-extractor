@@ -342,39 +342,13 @@ Deno.serve(async (req) => {
             }
 
             case 'lookup': {
+                // Strict exact match only (trim + case-insensitive). No fuzzy/prefix stripping.
                 const { economy } = params;
-
-                if (!economy) {
-                    return Response.json({ error: 'Economy name required' }, { status: 400 });
-                }
-
+                if (!economy) return Response.json({ error: 'Economy name required' }, { status: 400 });
                 const codes = await base44.entities.EconomyCode.list();
                 const needle = economy.toLowerCase().trim();
-
-                // Exact match first
-                let match = codes.find(c =>
-                    c.economy.toLowerCase().trim() === needle
-                );
-
-                // Fuzzy: try without common prefixes/suffixes
-                if (!match) {
-                    const stripped = needle
-                        .replace(/^(republic of|kingdom of|state of|federation of|united )\s*/i, '')
-                        .replace(/\s*(, republic| republic| federation)$/i, '')
-                        .trim();
-                    match = codes.find(c => {
-                        const stored = c.economy.toLowerCase().trim()
-                            .replace(/^(republic of|kingdom of|state of|federation of|united )\s*/i, '')
-                            .replace(/\s*(, republic| republic| federation)$/i, '')
-                            .trim();
-                        return stored === stripped || stored === needle || c.economy.toLowerCase().trim() === stripped;
-                    });
-                }
-
-                return Response.json({
-                    found: !!match,
-                    economy_code: match?.economy_code || null
-                });
+                const match = codes.find(c => c.economy.toLowerCase().trim() === needle);
+                return Response.json({ found: !!match, economy_code: match?.economy_code || null });
             }
 
             case 'deleteAll': {
