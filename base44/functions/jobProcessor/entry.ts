@@ -1671,8 +1671,8 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             if (!(parsed.evidence.Selected_Source_URLs || '').trim()) parsed.evidence.Selected_Source_URLs = urlsStr;
                             if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
                                 const nonWbl = toolUrls.filter(u => !isWblUrl(u));
-                                const govUrl = nonWbl.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
-                                const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
+                                const govUrl = nonWbl.find(u => /\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|wipo\.int/i.test(u));
                                 parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || nonWbl[0] || '';
                             }
                             if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
