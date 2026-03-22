@@ -35,13 +35,22 @@ export default function SpecEditor() {
         }
     }, [editedText, spec]);
 
+    const [specLoadError, setSpecLoadError] = useState(null);
+
     const loadSpec = async () => {
+        setSpecLoadError(null);
         try {
             const response = await base44.functions.invoke('specManager', { action: 'getActive' });
-            setSpec(response.data.spec);
-            setEditedText(response.data.spec?.current_text || '');
+            if (!response.data.spec) {
+                setSpecLoadError('No specification found. Create one by entering text below and saving.');
+            } else {
+                setSpec(response.data.spec);
+                setEditedText(response.data.spec?.current_text || '');
+            }
         } catch (error) {
-            toast.error('Failed to load spec');
+            const raw = error?.response?.data?.error || '';
+            const msg = raw || 'Could not load the specification. Check your connection and try again.';
+            setSpecLoadError(msg);
         } finally {
             setLoading(false);
         }
@@ -52,7 +61,7 @@ export default function SpecEditor() {
             const response = await base44.functions.invoke('specManager', { action: 'getVersions' });
             setVersions(response.data.versions || []);
         } catch (error) {
-            console.error('Failed to load versions:', error);
+            toast.error('Could not load version history.');
         }
     };
 
@@ -92,10 +101,12 @@ export default function SpecEditor() {
             setSpec(response.data.spec);
             setEditedText(response.data.spec?.current_text || '');
             setHasChanges(false);
+            setSpecLoadError(null);
             toast.success('Default spec restored');
             loadVersions();
         } catch (error) {
-            toast.error('Failed to restore default');
+            const msg = error?.response?.data?.error || 'Failed to restore default specification. Please try again.';
+            toast.error(msg);
         } finally {
             setSaving(false);
         }
@@ -114,35 +125,60 @@ export default function SpecEditor() {
         const name = file.name.toLowerCase();
         const isPlainText = name.endsWith('.txt') || name.endsWith('.md');
 
+        const supportedExts = ['.txt', '.md', '.docx', '.pdf'];
+        if (!supportedExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
+            toast.error('Unsupported file type. Please upload a .txt, .md, .docx, or .pdf file.');
+            e.target.value = '';
+            return;
+        }
+
         setImportingFile(true);
         try {
             if (isPlainText) {
-                // Plain text files: read directly in the browser, load into editor
                 const text = await file.text();
                 if (!text.trim()) {
-                    toast.error('File is empty');
+                    toast.error('The file is empty — no content to import.');
                     return;
                 }
                 setEditedText(text);
+                setSpecLoadError(null);
                 setActiveTab('edit');
                 toast.success(`Loaded "${file.name}" into editor. Review and click Save to apply.`);
             } else {
-                // Binary files (docx, pdf): upload and extract via backend
-                const { file_url } = await base44.integrations.Core.UploadFile({ file });
+                let file_url;
+                try {
+                    ({ file_url } = await base44.integrations.Core.UploadFile({ file }));
+                } catch (uploadErr) {
+                    toast.error('Could not upload the file. Check your connection and try again.');
+                    return;
+                }
                 const response = await base44.functions.invoke('specManager', {
                     action: 'restoreFromFile',
                     file_url,
                 });
                 const updatedSpec = response.data.spec;
+                if (!updatedSpec?.current_text) {
+                    toast.warning('The file was processed but no text content was extracted. The file may be empty or in an unsupported format.');
+                    return;
+                }
                 setSpec(updatedSpec);
-                setEditedText(updatedSpec?.current_text || '');
+                setEditedText(updatedSpec.current_text);
                 setHasChanges(false);
+                setSpecLoadError(null);
                 setActiveTab('edit');
                 loadVersions();
                 toast.success(`Spec loaded from "${file.name}" and saved as a new version.`);
             }
         } catch (error) {
-            const msg = error?.response?.data?.error || 'Failed to import spec from file';
+            const raw = error?.response?.data?.error || '';
+            let msg;
+            if (/extract|parse|read/i.test(raw)) {
+                msg = `Could not read the file content. ${raw}`;
+            } else if (raw) {
+                msg = raw;
+            } else {
+                msg = 'Failed to import spec from file. The file may be corrupted or in an unsupported format.';
+            }
             toast.error(msg);
         } finally {
             setImportingFile(false);
@@ -160,6 +196,17 @@ export default function SpecEditor() {
 
     return (
         <div className="space-y-6">
+            {specLoadError && (
+                <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
+                    <div>
+                        <p className="text-sm font-medium text-red-800">{specLoadError}</p>
+                        <Button variant="link" size="sm" className="text-red-700 px-0 h-auto mt-1" onClick={() => { setLoading(true); loadSpec(); }}>
+                            Retry loading
+                        </Button>
+                    </div>
+                </div>
+            )}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <div>

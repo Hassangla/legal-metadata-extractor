@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Server, Globe, Upload, Loader2, Search, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, DollarSign, RefreshCw, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import ConnectionManager from '@/components/connections/ConnectionManager';
@@ -35,12 +35,17 @@ export default function Settings() {
 
     const isAdmin = user?.role === 'admin';
 
+    const [loadError, setLoadError] = useState(null);
+
     const loadEconomyCodes = async () => {
+        setLoadError(null);
         try {
             const response = await base44.functions.invoke('economyCodes', { action: 'list' });
             setEconomyCodes(response.data.codes || []);
         } catch (error) {
-            console.error('Failed to load economy codes:', error);
+            const msg = error?.response?.data?.error || 'Could not load economy codes. Check your connection and try again.';
+            setLoadError(msg);
+            toast.error(msg);
         } finally {
             setLoading(false);
         }
@@ -50,9 +55,16 @@ export default function Settings() {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        const name = file.name.toLowerCase();
+        const supportedTypes = ['.csv', '.xlsx', '.xls'];
+        if (!supportedTypes.some(ext => name.endsWith(ext))) {
+            toast.error(`Unsupported file type. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file.`);
+            e.target.value = '';
+            return;
+        }
+
         setImporting(true);
         try {
-            // All file types (CSV, Excel) go through backend for consistent parsing
             const { file_url } = await base44.integrations.Core.UploadFile({ file });
             const response = await base44.functions.invoke('economyCodes', {
                 action: 'importFromFile',
@@ -60,11 +72,29 @@ export default function Settings() {
                 file_name: file.name,
             });
             const d = response.data;
-            toast.success(`Imported ${d.imported} new, updated ${d.updated}, skipped ${d.skipped} unchanged (${d.total} rows total)`);
+            if ((d.imported || 0) === 0 && (d.updated || 0) === 0 && (d.total || 0) > 0) {
+                toast.info(`No changes — all ${d.total} rows already matched existing records.`);
+            } else if ((d.total || 0) === 0) {
+                toast.warning('File contained no valid rows. Make sure it has "economy" and "economy_code" columns with data.');
+            } else {
+                toast.success(`Imported ${d.imported} new, updated ${d.updated}, skipped ${d.skipped} unchanged (${d.total} rows total)`);
+            }
             loadEconomyCodes();
         } catch (error) {
-            const msg = error?.response?.data?.error;
-            toast.error(msg || 'Failed to import economy codes');
+            const raw = error?.response?.data?.error || '';
+            let msg;
+            if (/header|column/i.test(raw)) {
+                msg = `Missing required columns: the file needs "economy" and "economy_code" headers. ${raw}`;
+            } else if (/empty/i.test(raw)) {
+                msg = `The file appears to be empty. ${raw}`;
+            } else if (/unsupported|format/i.test(raw)) {
+                msg = `Unsupported file format. Upload a CSV or Excel file. ${raw}`;
+            } else if (raw) {
+                msg = raw;
+            } else {
+                msg = 'Import failed — could not process the file. Please check the format and try again.';
+            }
+            toast.error(msg);
         } finally {
             setImporting(false);
             e.target.value = '';
@@ -270,6 +300,15 @@ export default function Settings() {
                                 {loading ? (
                                     <div className="flex items-center justify-center py-8">
                                         <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+                                    </div>
+                                ) : loadError ? (
+                                    <div className="text-center py-12">
+                                        <AlertCircle className="w-12 h-12 text-red-300 mx-auto mb-4" />
+                                        <p className="text-red-600 font-medium mb-2">Failed to load economy codes</p>
+                                        <p className="text-sm text-slate-500 mb-4">{loadError}</p>
+                                        <Button variant="outline" size="sm" onClick={() => { setLoading(true); loadEconomyCodes(); }}>
+                                            Retry
+                                        </Button>
                                     </div>
                                 ) : economyCodes.length === 0 ? (
                                     <div className="text-center py-12">
