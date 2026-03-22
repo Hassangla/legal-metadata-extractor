@@ -912,15 +912,8 @@ async function finalizeAndVerify(ev, ctx) {
         }
     }
 
-    // Tier 5 hard-stop enforcement (run again at the end to prevent later steps from repopulating restricted fields)
-    if (isTier5) {
-        ev.Final_Enactment_Date = '';
-        ev.Final_Date_of_Entry_in_Force = '';
-        ev.Final_Repeal_Year = '';
-        ev.Final_Current_Status = '';
-        ev.Final_Public = '';
-        ev.Final_Flag = 'Tier 5';
-    }
+    // Tier 5 hard-stop re-enforcement (prevent later steps from repopulating restricted fields)
+    if (isTier5) { for (const f of ['Final_Enactment_Date','Final_Date_of_Entry_in_Force','Final_Repeal_Year','Final_Current_Status','Final_Public']) ev[f]=''; ev.Final_Flag='Tier 5'; }
 
     // ── (C2) SILENT TOOL FAILURE: web search enabled but no tool URLs observed ──
     // If the provider was supposed to search but returned zero tool URLs,
