@@ -547,14 +547,12 @@ function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
         }
     }
 
-    // Kimi / OpenAI-compatible: capture URLs from tool call arguments and assistant text
+    // Kimi / OpenAI-compatible: capture URLs from structured tool call arguments ONLY
+    // (not from assistant plain-text content — that would be model-typed, not tool-returned)
     if (Array.isArray(msg?.tool_calls)) {
         for (const tc of msg.tool_calls) {
             collectUrlsDeep(tc.function?.arguments, urls);
         }
-    }
-    if (typeof msg?.content === 'string') {
-        for (const u of extractUrlsFromText(msg.content)) urls.push(u);
     }
 
     // Some OpenAI/compatible responses include top-level citations
