@@ -1424,6 +1424,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             providerType, job.model_id, systemPrompt, userPrompt,
                             effectiveWebSearch, conn.base_url, apiKey
                         );
+                        console.log(`[DIAG] row=${row.row_index} apiPath=${isResponsesApi ? 'responses' : 'chat'} effectiveSearch=${effectiveWebSearch} provider=${providerType} model=${job.model_id}`);
 
                         let data;
                         let inputTokens = 0;
