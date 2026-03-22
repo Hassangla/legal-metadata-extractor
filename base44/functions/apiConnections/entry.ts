@@ -263,8 +263,8 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
     }
 
     if (providerKey === 'openai') {
-        // Pattern-based: automatically covers gpt-5.x, gpt-6, and future models.
-        const WEB_SEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4'];
+        // Pattern-based: automatically covers gpt-5.x, gpt-6, chatgpt-4o, and future models.
+        const WEB_SEARCH_PREFIXES = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'chatgpt-4o', 'o1', 'o3', 'o4'];
         const matches = WEB_SEARCH_PREFIXES.some(prefix =>
             id === prefix || id.startsWith(prefix + '-') || id.startsWith(prefix + '.') || id.startsWith(prefix + ' ')
         );
