@@ -1486,6 +1486,9 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         const searchWasRequested = requestedWebSearch !== 'none';
                         const sawServerToolCall = isKimiSearch && kimiObservedToolCalls;
                         const sawSearchSignal = responseHasSearchSignal(providerType, data, isResponsesApi) || sawServerToolCall;
+                        // STRICT PROVENANCE: searchActuallyWorked requires structured tool URLs,
+                        // not just a search signal. A search call that returns zero URLs is not
+                        // evidence of successful search — model-typed dates/status must not survive.
                         let searchActuallyWorked = hasRealWebSearch;
 
                         console.log(`[DIAG] row=${row.row_index} toolError=${toolError} searchWasRequested=${searchWasRequested} sawSearchSignal=${sawSearchSignal} sawServerToolCall=${sawServerToolCall}`);
