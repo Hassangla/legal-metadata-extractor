@@ -6,6 +6,7 @@ const MAX_WALL_MS = 18_000; // 18 seconds — safe margin
 const LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes — matches scheduler interval
 const STALE_RUNNING_MS = 10 * 60 * 1000; // 10 minutes — recover stuck "running" jobs
 const STALE_QUEUED_MS = 15 * 60 * 1000; // 15 minutes — recover orphaned "queued" jobs
+const SELF_INVOKE_DELAY_MS = 1_000; // 1 second pause before self-invoke
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -93,6 +94,7 @@ Deno.serve(async (req) => {
         // ── STEP 2: Process batches within time limit ──
         let batchesRun = 0;
         let lastResult = null;
+        let shouldSelfInvoke = false;
 
         while (Date.now() - startTime < MAX_WALL_MS) {
             // Re-fetch job to check for external status changes (pause/cancel)
@@ -129,6 +131,7 @@ Deno.serve(async (req) => {
                 } else {
                     console.log(`[processQueuedJobs] Job ${job_id} — ${processingRows.length} rows still processing, not marking done yet.`);
                     lastResult = { status: 'waiting_for_processing_rows' };
+                    shouldSelfInvoke = true; // re-check soon
                 }
                 break;
             }
@@ -151,6 +154,7 @@ Deno.serve(async (req) => {
                 }
                 // Transient error — stop this invocation, next scheduler tick will retry
                 lastResult = { error: invokeErr.message };
+                shouldSelfInvoke = true; // try again soon rather than waiting 5 min
                 break;
             }
 
@@ -163,6 +167,9 @@ Deno.serve(async (req) => {
             if (remaining === 0 || remaining === undefined) {
                 break;
             }
+
+            // There's more work — we'll self-invoke after this invocation ends
+            shouldSelfInvoke = true;
 
             // Check time before another batch
             if (Date.now() - startTime + 2000 >= MAX_WALL_MS) {
@@ -187,11 +194,41 @@ Deno.serve(async (req) => {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
+        // ── STEP 4: Self-invoke if more work remains ──
+        // This keeps jobs processing continuously without depending on the
+        // 5-minute scheduler or the browser staying open.
+        if (!shouldSelfInvoke) {
+            // Even if this job is done, check if other queued jobs exist
+            try {
+                const moreQueued = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1);
+                if (moreQueued.length > 0) {
+                    shouldSelfInvoke = true;
+                }
+            } catch (_) { /* non-fatal */ }
+        }
+
+        if (shouldSelfInvoke) {
+            // Fire-and-forget: delay slightly then re-invoke ourselves.
+            // If this fails, the 5-min scheduler is the safety net.
+            try {
+                await sleep(SELF_INVOKE_DELAY_MS);
+                // Don't await the full response — just kick it off
+                base44.functions.invoke('processQueuedJobs', { _self_invoke: true }).catch((err) => {
+                    console.warn(`[processQueuedJobs] Self-invoke failed (scheduler will retry): ${err.message}`);
+                });
+                console.log(`[processQueuedJobs] Self-invoked for continued processing.`);
+            } catch (selfErr) {
+                // Non-fatal — scheduler will pick it up in ≤5 min
+                console.warn(`[processQueuedJobs] Self-invoke failed (scheduler will retry): ${selfErr.message}`);
+            }
+        }
+
         return Response.json({
             job_id,
             batches_run: batchesRun,
             elapsed_seconds: elapsed,
             last_result: lastResult,
+            self_invoked: shouldSelfInvoke,
         });
 
     } catch (error) {
