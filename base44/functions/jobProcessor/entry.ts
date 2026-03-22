@@ -711,6 +711,8 @@ async function verifyCandidateUrls(candidates, maxCheck) {
 }
 function parseUrlList(raw) { if (!raw) return []; if (Array.isArray(raw)) return raw.map(u=>u.trim()).filter(Boolean); return String(raw).split(/[,;\n]+/).map(u=>u.trim()).filter(u=>u.startsWith('http')); }
 function urlInList(url, list) { if (!url||!list) return false; const n=url.replace(/\/+$/,'').toLowerCase(); return parseUrlList(list).some(i=>i.replace(/\/+$/,'').toLowerCase()===n); }
+function isWblUrl(url) { try { return new URL(url).hostname.toLowerCase()==='wbl.worldbank.org'; } catch(_) { return false; } }
+function findBestNonWblUrl(ev, toolUrls) { const score=(u)=>/\.gov\b|\.go\.|parliament|gazette|official|legislation/i.test(u)?1:/faolex|natlex|ilo\.org|wipo\.int/i.test(u)?2:/worldbank\.org/i.test(u)?3:4; const all=[...new Set([...parseUrlList(ev.Selected_Source_URLs),...parseUrlList(ev.URLs_Considered),...(toolUrls||[])])].filter(u=>u&&!isWblUrl(u)); if(!all.length)return null; all.sort((a,b)=>score(a)-score(b)); return all[0]; }
 
 const ARTICLE_REFERENCE_REGEXES = [/\b(?:articles?|arts?\.?|art\.)\s*\d+[\w\-–]*(?:\s*(?:,|and|&|et|y|e|und|و|وَ|و\s+|al|a)\s*\d+[\w\-–]*)*/gi,/\b(?:artículos?|arts?\.?|article(?:s)?|art(?:icle)?s?)\s*\d+[\w\-–]*(?:\s*(?:,|y|e|et|and|&|a|à)\s*\d+[\w\-–]*)*/gi,/\b(?:المادة|المواد)\s*\d+[\w\-–]*(?:\s*(?:و|،)\s*\d+[\w\-–]*)*/gi];
 
