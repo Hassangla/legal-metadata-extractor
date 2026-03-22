@@ -1674,9 +1674,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             if (!(parsed.evidence.URLs_Considered || '').trim()) parsed.evidence.URLs_Considered = urlsStr;
                             if (!(parsed.evidence.Selected_Source_URLs || '').trim()) parsed.evidence.Selected_Source_URLs = urlsStr;
                             if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
-                                const govUrl = toolUrls.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
-                                const legalDbUrl = toolUrls.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
-                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || toolUrls[0];
+                                const nonWbl = toolUrls.filter(u => !isWblUrl(u));
+                                const govUrl = nonWbl.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                const legalDbUrl = nonWbl.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
+                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || nonWbl[0] || '';
                             }
                             if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
                                 const fu = parsed.evidence.Final_Instrument_URL.toLowerCase();
