@@ -52,51 +52,19 @@ export default function Settings() {
 
         setImporting(true);
         try {
-            const name = file.name.toLowerCase();
-
-            if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-                const { file_url } = await base44.integrations.Core.UploadFile({ file });
-                const response = await base44.functions.invoke('economyCodes', {
-                    action: 'importFromFile',
-                    file_url,
-                    file_name: file.name
-                });
-                toast.success(`Imported ${response.data.imported} new, updated ${response.data.updated}, skipped ${response.data.skipped} unchanged`);
-            } else {
-                const text = await file.text();
-                const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-                if (lines.length < 2) {
-                    toast.error('File is empty or has no data rows');
-                    return;
-                }
-
-                const delimiter = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
-                const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
-                const economyIdx = headers.findIndex(h => ['economy', 'economy_name', 'name', 'country', 'country_name'].includes(h));
-                const codeIdx = headers.findIndex(h => ['economy_code', 'code', 'iso_code', 'iso3', 'country_code'].includes(h));
-
-                if (economyIdx === -1 || codeIdx === -1) {
-                    toast.error('File must have "economy" and "economy_code" columns');
-                    return;
-                }
-
-                const data = [];
-                for (let i = 1; i < lines.length; i++) {
-                    const values = lines[i].split(delimiter).map(v => v.trim().replace(/^["']|["']$/g, ''));
-                    if (values[economyIdx] && values[codeIdx]) {
-                        data.push({ economy: values[economyIdx], economy_code: values[codeIdx] });
-                    }
-                }
-
-                const response = await base44.functions.invoke('economyCodes', {
-                    action: 'import',
-                    data
-                });
-                toast.success(`Imported ${response.data.imported} new, updated ${response.data.updated}, skipped ${response.data.skipped} unchanged`);
-            }
+            // All file types (CSV, Excel) go through backend for consistent parsing
+            const { file_url } = await base44.integrations.Core.UploadFile({ file });
+            const response = await base44.functions.invoke('economyCodes', {
+                action: 'importFromFile',
+                file_url,
+                file_name: file.name,
+            });
+            const d = response.data;
+            toast.success(`Imported ${d.imported} new, updated ${d.updated}, skipped ${d.skipped} unchanged (${d.total} rows total)`);
             loadEconomyCodes();
         } catch (error) {
-            toast.error(error?.response?.data?.error || 'Failed to import');
+            const msg = error?.response?.data?.error;
+            toast.error(msg || 'Failed to import economy codes');
         } finally {
             setImporting(false);
             e.target.value = '';

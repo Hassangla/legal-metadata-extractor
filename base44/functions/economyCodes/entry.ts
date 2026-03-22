@@ -1,29 +1,144 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 import * as XLSX from 'npm:xlsx@0.18.5';
 
-// Simple CSV parser
-function parseCSV(text) {
-    const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-    if (lines.length === 0) return [];
+// ── ECONOMY / CODE HEADER VARIANTS ──────────────────────────
+const ECONOMY_HEADERS = new Set(['economy', 'economy_name', 'name', 'country', 'country_name']);
+const CODE_HEADERS    = new Set(['economy_code', 'code', 'iso_code', 'iso3', 'country_code']);
 
-    const delimiter = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
-    const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+// ── RFC 4180-compliant CSV parser ───────────────────────────
+// Handles: BOM, quoted fields, commas/newlines inside quotes,
+//          semicolon delimiter detection, whitespace trimming.
 
-    const economyIdx = headers.findIndex(h => h === 'economy' || h === 'economy_name' || h === 'name' || h === 'country' || h === 'country_name');
-    const codeIdx = headers.findIndex(h => h === 'economy_code' || h === 'code' || h === 'iso_code' || h === 'iso3' || h === 'country_code');
+function parseCSVText(raw) {
+    if (!raw || typeof raw !== 'string') return { error: 'Empty file' };
 
-    if (economyIdx === -1 || codeIdx === -1) return null;
+    // Strip UTF-8 BOM
+    let text = raw;
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    text = text.trim();
+    if (!text) return { error: 'Empty file' };
+
+    // Tokenize respecting quoted fields (RFC 4180)
+    function tokenize(input, delim) {
+        const rows = [];
+        let row = [];
+        let i = 0;
+        const len = input.length;
+
+        while (i < len) {
+            // Start of field
+            if (input[i] === '"') {
+                // Quoted field
+                let field = '';
+                i++; // skip opening quote
+                while (i < len) {
+                    if (input[i] === '"') {
+                        if (i + 1 < len && input[i + 1] === '"') {
+                            field += '"';
+                            i += 2; // escaped quote
+                        } else {
+                            i++; // closing quote
+                            break;
+                        }
+                    } else {
+                        field += input[i];
+                        i++;
+                    }
+                }
+                row.push(field);
+                // Consume delimiter or newline after closing quote
+                if (i < len && input[i] === delim) {
+                    i++;
+                } else if (i < len && (input[i] === '\r' || input[i] === '\n')) {
+                    if (input[i] === '\r' && i + 1 < len && input[i + 1] === '\n') i += 2;
+                    else i++;
+                    rows.push(row);
+                    row = [];
+                }
+                // else: end of input, will flush below
+            } else {
+                // Unquoted field — read until delimiter or newline
+                let field = '';
+                while (i < len && input[i] !== delim && input[i] !== '\r' && input[i] !== '\n') {
+                    field += input[i];
+                    i++;
+                }
+                row.push(field);
+                if (i < len && input[i] === delim) {
+                    i++;
+                } else if (i < len) {
+                    if (input[i] === '\r' && i + 1 < len && input[i + 1] === '\n') i += 2;
+                    else i++;
+                    rows.push(row);
+                    row = [];
+                }
+            }
+        }
+        // Flush last row
+        if (row.length > 0) {
+            // Skip if it's a single empty-string field at EOF
+            if (!(row.length === 1 && row[0].trim() === '')) {
+                rows.push(row);
+            }
+        }
+        return rows;
+    }
+
+    // Try comma first, fall back to semicolon if headers don't match
+    function detectDelimiter() {
+        // Look at the first line only (up to the first unquoted newline)
+        let firstLine = '';
+        let inQ = false;
+        for (let j = 0; j < text.length; j++) {
+            if (text[j] === '"') inQ = !inQ;
+            if (!inQ && (text[j] === '\n' || text[j] === '\r')) break;
+            firstLine += text[j];
+        }
+        const commas = (firstLine.match(/,/g) || []).length;
+        const semis  = (firstLine.match(/;/g) || []).length;
+        // If semicolons present and more than commas, try semicolons first
+        if (semis > 0 && semis >= commas) {
+            const semiHeaders = firstLine.split(';').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+            const hasSemiEcon = semiHeaders.some(h => ECONOMY_HEADERS.has(h));
+            const hasSemiCode = semiHeaders.some(h => CODE_HEADERS.has(h));
+            if (hasSemiEcon && hasSemiCode) return ';';
+        }
+        // Try comma
+        if (commas > 0) {
+            const commaHeaders = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+            const hasCommaEcon = commaHeaders.some(h => ECONOMY_HEADERS.has(h));
+            const hasCommaCode = commaHeaders.some(h => CODE_HEADERS.has(h));
+            if (hasCommaEcon && hasCommaCode) return ',';
+        }
+        // Fallback: whichever has more
+        return semis > commas ? ';' : ',';
+    }
+
+    const delim = detectDelimiter();
+    const allRows = tokenize(text, delim);
+    if (allRows.length === 0) return { error: 'Empty file' };
+
+    // Parse headers
+    const headers = allRows[0].map(h => h.trim().toLowerCase());
+    const economyIdx = headers.findIndex(h => ECONOMY_HEADERS.has(h));
+    const codeIdx    = headers.findIndex(h => CODE_HEADERS.has(h));
+
+    if (economyIdx === -1 || codeIdx === -1) {
+        return {
+            error: `Required headers not found. Expected one of [${[...ECONOMY_HEADERS].join(', ')}] and one of [${[...CODE_HEADERS].join(', ')}]. Found: [${headers.join(', ')}]`,
+        };
+    }
 
     const rows = [];
-    for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(delimiter).map(v => v.trim().replace(/^["']|["']$/g, ''));
-        const economy = values[economyIdx];
-        const code = values[codeIdx];
+    for (let i = 1; i < allRows.length; i++) {
+        const vals = allRows[i];
+        const economy = (vals[economyIdx] || '').trim();
+        const code    = (vals[codeIdx]    || '').trim();
         if (economy && code) {
-            rows.push({ economy: economy.toLowerCase().trim(), economy_code: code.trim().toUpperCase() });
+            rows.push({ economy: economy.toLowerCase(), economy_code: code.toUpperCase() });
         }
     }
-    return rows;
+    return { rows };
 }
 
 // Excel parser for economy codes
