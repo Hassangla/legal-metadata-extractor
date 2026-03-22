@@ -1531,7 +1531,10 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 console.log(`[DIAG] row=${row.row_index} IGNORED ${contentUrls.length} model-typed URL(s) from plain text (not tool-returned): ${contentUrls.slice(0,3).join(', ')}`);
                             }
                         }
-                        if (searchActuallyWorked && (toolError || (toolUrls.length === 0 && !sawSearchSignal && !sawServerToolCall))) {
+                        // STRICT: search only counts if structured tool URLs were returned.
+                        // Search signal alone (tool invoked, 0 URLs) is insufficient provenance.
+                        if (searchActuallyWorked && (toolError || toolUrls.length === 0)) {
+                            if (sawSearchSignal && !toolUrls.length) console.log(`[PROVENANCE] row=${row.row_index} Search tool invoked but 0 URLs — demoting to no-search.`);
                             searchActuallyWorked = false;
                         }
 
