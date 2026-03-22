@@ -1038,9 +1038,8 @@ async function finalizeAndVerify(ev, ctx) {
     ev.Economy_Code = ctx.economyCode;
     ev.Legal_basis_verbatim = ctx.legalBasis;
 
-    if (!ctx.economyCode) {
-        addReason('Economy code not found in lookup table.');
-    }
+    if (!ctx.economyCode) { addReason(ctx.ecoAliasTarget?`Economy code missing: "${ctx.economy}" aliased→"${ctx.ecoAliasTarget}" but not in table. Add in Settings.`:`Economy code missing: "${ctx.economy}" not found. Add in Settings → Economy Codes.`); }
+    else if (ctx.ecoAlias) { addReason(`Economy alias: "${ctx.economy}"→"${ctx.ecoAliasTarget}" (code: ${ctx.economyCode}). Consider adding "${ctx.economy}" directly.`); }
 
     // ── (E) Normalize Missing/Conflict_Reason field naming ──
     // Merge any pre-existing reason with new notes
@@ -1058,7 +1057,7 @@ const PORTUGUESE_SPEAKING_ECONOMIES = new Set(['brazil','brasil','portugal','ang
 function isPortugueseSpeakingEconomy(e){if(!e)return false;const n=e.toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();return PORTUGUESE_SPEAKING_ECONOMIES.has(n)||PORTUGUESE_SPEAKING_ECONOMIES.has(e.toLowerCase().trim());}
 function hasPortugueseMarkers(t){return!!t&&(/\bLei\b/i.test(t)||/\bPortaria\b/i.test(t)||/\bResolu[cç][aã]o\b/i.test(t)||/\bDecreto-?Lei\b/i.test(t)||/[ãõ]/.test(t)||/ção\b/i.test(t));}
 
-// ── ECONOMY ALIASES ─────────────────────────────────────────
+// Economy resolution: strict exact match first; alias fallback is transparent and logged into evidence.
 const ECONOMY_ALIASES = {"ivory coast":"Côte d'Ivoire","cote divoire":"Côte d'Ivoire","cote d ivoire":"Côte d'Ivoire","south korea":"Korea, Rep.","republic of korea":"Korea, Rep.","north korea":"Korea, Dem. People's Rep.","democratic republic of the congo":"Congo, Dem. Rep.","drc":"Congo, Dem. Rep.","republic of congo":"Congo, Rep.","czech republic":"Czechia","swaziland":"Eswatini","burma":"Myanmar","holland":"Netherlands","usa":"United States","united states of america":"United States","uk":"United Kingdom","great britain":"United Kingdom","russia":"Russian Federation","iran":"Iran, Islamic Rep.","syria":"Syrian Arab Republic","venezuela":"Venezuela, RB","egypt":"Egypt, Arab Rep.","yemen":"Yemen, Rep.","laos":"Lao PDR","slovakia":"Slovak Republic","macedonia":"North Macedonia","cape verde":"Cabo Verde","east timor":"Timor-Leste","gambia":"Gambia, The","bahamas":"Bahamas, The","taiwan":"Taiwan, China","hong kong":"Hong Kong SAR, China","macau":"Macao SAR, China","macao":"Macao SAR, China","palestine":"West Bank and Gaza","brunei":"Brunei Darussalam","micronesia":"Micronesia, Fed. Sts.","vietnam":"Viet Nam","kyrgyzstan":"Kyrgyz Republic","st. lucia":"St. Lucia","saint lucia":"St. Lucia","st. kitts":"St. Kitts and Nevis","saint kitts":"St. Kitts and Nevis","st. vincent":"St. Vincent and the Grenadines","saint vincent":"St. Vincent and the Grenadines"};
 
 // ── MODEL PRICING (per million tokens) ──────────────────────
@@ -1257,9 +1256,9 @@ Deno.serve(async (req) => {
                     try {
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
-                        const rawEconomy = (input.Economy || '').toLowerCase().trim();
-                        const resolvedEconomy = ECONOMY_ALIASES[rawEconomy] || rawEconomy;
-                        const economyCode = economyMap[rawEconomy] || economyMap[resolvedEconomy] || '';
+                        const {code:economyCode,ecoAlias,ecoAliasTarget} = resolveEconomyCode(input.Economy, economyMap);
+                        if(ecoAlias) console.log(`[ECON] row=${row.row_index} Alias: "${input.Economy}"→"${ecoAliasTarget}" code="${economyCode||'MISSING'}"`);
+                        else if(!economyCode) console.log(`[ECON] row=${row.row_index} No match: "${input.Economy}"`);
                         const legalBasis = input.Legal_basis || input['Legal basis'] || '';
 
                         // Spec-compliant 3-attempt search strategy
@@ -1709,7 +1708,7 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             evidenceDerivedVerifiedUrls,
                             row_index: row.row_index,
                             economy: input.Economy,
-                            economyCode,
+                            economyCode, ecoAlias, ecoAliasTarget,
                             legalBasis,
                             requestedWebSearch,
                             searchChoiceCompatible,
