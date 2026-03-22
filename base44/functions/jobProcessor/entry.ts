@@ -473,6 +473,8 @@ function collectUrlsDeep(value, out) {
     }
 }
 
+// PROVENANCE: Extract URLs ONLY from structured tool outputs (annotations, citations, grounding).
+// Model plain-text content is NEVER parsed here — that is intentional and critical.
 function extractToolUrlsFromResponse(providerType, data, isResponsesApi) {
     const urls = [];
     // OpenAI Responses API: annotations on output_text parts + web_search_call payloads
