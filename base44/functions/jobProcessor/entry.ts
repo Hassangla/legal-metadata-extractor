@@ -868,21 +868,17 @@ async function finalizeAndVerify(ev, ctx) {
 
     // ── (A1) WBL EXCLUSION — hard server-side block for wbl.worldbank.org ──
     if (ev.Final_Instrument_URL && isWblUrl(ev.Final_Instrument_URL)) { const bk=ev.Final_Instrument_URL,alt=findBestNonWblUrl(ev,ctx.toolUrls); if(alt){ev.Final_Instrument_URL=alt;console.log(`[WBL-BLOCK] row=${ctx.row_index} Replaced WBL "${bk}" → "${alt}"`);addReason(`WBL exclusion: replaced "${bk}" with trusted alternative "${alt}".`);}else{ev.Final_Instrument_URL='';console.log(`[WBL-BLOCK] row=${ctx.row_index} Blanked WBL "${bk}" — no alternative`);addReason(`WBL exclusion: blanked "${bk}" (wbl.worldbank.org). No trusted alternative found.`);} }
-    // ── (B) MINIMUM VERIFICATION — verify the URL loads ──
+    // ── (B) MINIMUM VERIFICATION — verify URL loads. Alternates restricted to tool-proven URLs. ──
     if (ctx.hasRealWebSearch && ev.Final_Instrument_URL) {
         const loads = await verifyUrlLoads(ev.Final_Instrument_URL);
-        if (loads) {
-            ev.Final_Public = 'Yes';
-        }
+        if (loads) { ev.Final_Public = 'Yes'; }
         if (!loads) {
-            // Try alternate URLs from Selected_Source_URLs
-            const alternates = parseUrlList(ev.Selected_Source_URLs)
-                .filter(u => u.replace(/\/+$/, '').toLowerCase() !== ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase());
-
+            const _ts=new Set((ctx.toolUrls||[]).map(u=>u.replace(/\/+$/,'').toLowerCase()));
+            const alternates = parseUrlList(ev.Selected_Source_URLs).filter(u => u.replace(/\/+$/, '').toLowerCase() !== ev.Final_Instrument_URL.replace(/\/+$/, '').toLowerCase());
             let found = false;
             for (const alt of alternates) {
-                // Each alternate must also be in URLs_Considered
                 if (!urlInList(alt, ev.URLs_Considered)) continue;
+                if (_ts.size>0&&!_ts.has(alt.replace(/\/+$/,'').toLowerCase())) continue;
                 const altLoads = await verifyUrlLoads(alt);
                 if (altLoads) {
                     addReason(
