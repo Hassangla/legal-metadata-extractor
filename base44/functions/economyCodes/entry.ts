@@ -243,7 +243,7 @@ Deno.serve(async (req) => {
                 return Response.json({ success: true, imported, updated, skipped });
             }
 
-            // Import from file URL (CSV or Excel)
+            // Import from file URL (CSV or Excel) — single entry point for all file types
             case 'importFromFile': {
                 if (user.role !== 'admin') {
                     return Response.json({ error: 'Admin access required' }, { status: 403 });
@@ -256,7 +256,7 @@ Deno.serve(async (req) => {
 
                 const fileResponse = await fetch(file_url);
                 if (!fileResponse.ok) {
-                    return Response.json({ error: 'Failed to fetch file' }, { status: 400 });
+                    return Response.json({ error: `Failed to fetch uploaded file (HTTP ${fileResponse.status})` }, { status: 400 });
                 }
 
                 const name = (file_name || '').toLowerCase();
@@ -267,24 +267,24 @@ Deno.serve(async (req) => {
                     rows = parseExcel(buffer);
                     if (rows === null) {
                         return Response.json({
-                            error: 'Could not find economy and code columns in Excel. Expected column headers like: economy/country/name and economy_code/code/iso_code.'
+                            error: `Could not find required columns in Excel file. Expected headers like: [${[...ECONOMY_HEADERS].join(', ')}] and [${[...CODE_HEADERS].join(', ')}].`
                         }, { status: 400 });
                     }
                 } else {
+                    // CSV / TSV / any text-based file
                     const csvText = await fileResponse.text();
-                    rows = parseCSV(csvText);
-                    if (rows === null) {
-                        return Response.json({
-                            error: 'Could not find economy and economy_code columns in CSV.'
-                        }, { status: 400 });
+                    const result = parseCSVText(csvText);
+                    if (result.error) {
+                        return Response.json({ error: result.error }, { status: 400 });
                     }
+                    rows = result.rows;
                 }
 
-                if (rows.length === 0) {
-                    return Response.json({ error: 'No valid data rows found in file' }, { status: 400 });
+                if (!rows || rows.length === 0) {
+                    return Response.json({ error: 'File parsed successfully but contained no valid data rows.' }, { status: 400 });
                 }
 
-                // MERGE: upsert logic
+                // MERGE: upsert logic (preserves existing data, only adds/updates)
                 const existing = await base44.entities.EconomyCode.list();
                 const existingMap = {};
                 for (const ec of existing) {
