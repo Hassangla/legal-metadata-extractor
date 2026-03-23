@@ -122,11 +122,11 @@ function parseKimiToolCallsFromText(text) {
 }
 
 // ── OPENAI RESPONSES API ALLOWLIST ──────────────────────────
-const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini']);
-const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano']);
+const OPENAI_RESPONSES_MODELS = new Set(['gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini','gpt-4.5-preview','gpt-5','gpt-5-mini','gpt-5.4']);
+const OPENAI_WEBSEARCH_MODELS = new Set(['gpt-4o','gpt-4o-mini','gpt-4o-search-preview','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4.5-preview','gpt-5','gpt-5-mini','gpt-5.4']);
 
-function isOpenAIResponsesModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_RESPONSES_MODELS.has(id)||[...OPENAI_RESPONSES_MODELS].some(a=>id.startsWith(a+'-')); }
-function isOpenAIWebSearchModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_WEBSEARCH_MODELS.has(id)||[...OPENAI_WEBSEARCH_MODELS].some(a=>id.startsWith(a+'-')); }
+function isOpenAIResponsesModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_RESPONSES_MODELS.has(id)||[...OPENAI_RESPONSES_MODELS].some(a=>id.startsWith(a+'-'))||/^gpt-[4-9]\.\d/.test(id)||/^gpt-[5-9]/.test(id); }
+function isOpenAIWebSearchModel(modelId) { const id=(modelId||'').toLowerCase(); return OPENAI_WEBSEARCH_MODELS.has(id)||[...OPENAI_WEBSEARCH_MODELS].some(a=>id.startsWith(a+'-'))||/^gpt-[4-9]\.\d/.test(id)||/^gpt-[5-9]/.test(id); }
 
 // ── ENCRYPTION ──────────────────────────────────────────────
 
@@ -593,6 +593,22 @@ function isNoSearchToolError(_providerType, data, content, isResponsesApi) {
     return false;
 }
 
+// ── WBL.WORLDBANK.ORG DETECTION ──────────────────────────────
+// The WBL (Women, Business and the Law) database should not be used as a primary
+// source since it is a secondary/derivative database. When detected, the app
+// must substitute an alternative source from the considered URLs.
+
+function isWblWorldBankUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    try {
+        const parsed = new URL(urlStr);
+        const hostname = parsed.hostname.toLowerCase();
+        return hostname === 'wbl.worldbank.org' || hostname === 'www.wbl.worldbank.org';
+    } catch (_) {
+        return false;
+    }
+}
+
 // ── URL SAFETY & VERIFICATION HELPERS ────────────────────────
 
 function isSafeHttpUrl(urlStr) {
@@ -902,6 +918,40 @@ async function finalizeAndVerify(ev, ctx) {
                 ev.Public_Access = [prevAccess, accessNote].filter(Boolean).join('; ');
                 addReason(accessNote + ' Final_Public set to "No".');
             }
+        }
+    }
+
+    // ── (B2) WBL.WORLDBANK.ORG REPLACEMENT ──
+    // wbl.worldbank.org is a secondary/derivative database. When detected as the
+    // selected source URL, automatically substitute with an alternative from the
+    // considered URLs list.
+    if (ctx.hasRealWebSearch && ev.Final_Instrument_URL && isWblWorldBankUrl(ev.Final_Instrument_URL)) {
+        const wblOriginal = ev.Final_Instrument_URL;
+        const alternates = parseUrlList(ev.Selected_Source_URLs || ev.URLs_Considered)
+            .filter(u => !isWblWorldBankUrl(u) && u.replace(/\/+$/, '').toLowerCase() !== wblOriginal.replace(/\/+$/, '').toLowerCase());
+        let replaced = false;
+        for (const alt of alternates) {
+            if (isSafeHttpUrl(alt) && await verifyUrlLoads(alt)) {
+                ev.Final_Instrument_URL = alt;
+                const prevNotes = ev.Normalization_Notes || '';
+                ev.Normalization_Notes = [prevNotes, `URL substituted: ${wblOriginal} → ${alt} (wbl.worldbank.org is a secondary source)`].filter(Boolean).join('; ');
+                addReason(`wbl.worldbank.org detected as source. Substituted with "${alt}" (alternative source that loaded successfully).`);
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            addReason(`wbl.worldbank.org detected as source ("${wblOriginal}"). No alternative source loaded successfully — URL kept but flagged as secondary/derivative database.`);
+        }
+    }
+    // Also filter wbl.worldbank.org URLs from URLs_Considered and Selected_Source_URLs
+    // to deprioritize them (move to end) rather than remove entirely.
+    if (ev.URLs_Considered) {
+        const considered = parseUrlList(ev.URLs_Considered);
+        const nonWbl = considered.filter(u => !isWblWorldBankUrl(u));
+        const wbl = considered.filter(u => isWblWorldBankUrl(u));
+        if (wbl.length > 0) {
+            ev.URLs_Considered = [...nonWbl, ...wbl].join('; ');
         }
     }
 
@@ -1675,25 +1725,28 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                         // URLs are in annotations, not in the model's JSON), inject them so
                         // provenance/closed-set checks can pass.
                         if (toolUrls.length > 0 && parsed?.evidence) {
+                            // Filter out wbl.worldbank.org URLs from auto-injection preference
+                            const nonWblToolUrls = toolUrls.filter(u => !isWblWorldBankUrl(u));
                             const urlsStr = toolUrls.join('; ');
                             if (!(parsed.evidence.URLs_Considered || '').trim()) {
                                 parsed.evidence.URLs_Considered = urlsStr;
                             }
                             if (!(parsed.evidence.Selected_Source_URLs || '').trim()) {
-                                parsed.evidence.Selected_Source_URLs = urlsStr;
+                                parsed.evidence.Selected_Source_URLs = (nonWblToolUrls.length > 0 ? nonWblToolUrls : toolUrls).join('; ');
                             }
                             if (!(parsed.evidence.Final_Instrument_URL || '').trim()) {
-                                // Pick the best URL: prefer .gov / official-looking URLs first
-                                const govUrl = toolUrls.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
-                                const legalDbUrl = toolUrls.find(u => /faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(u));
-                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || toolUrls[0];
+                                // Pick the best URL: prefer .gov / official-looking URLs first, skip wbl.worldbank.org
+                                const candidates = nonWblToolUrls.length > 0 ? nonWblToolUrls : toolUrls;
+                                const govUrl = candidates.find(u => /\.gov|\.go\.|parliament|gazette|official|legislation/i.test(u));
+                                const legalDbUrl = candidates.find(u => /faolex|natlex|ilo\.org|wipo\.int/i.test(u));
+                                parsed.evidence.Final_Instrument_URL = govUrl || legalDbUrl || candidates[0];
                             }
                             // If Source_Tier is empty, infer from the URL we selected
                             if (!(parsed.evidence.Source_Tier || '').trim() && parsed.evidence.Final_Instrument_URL) {
                                 const finalUrl = parsed.evidence.Final_Instrument_URL.toLowerCase();
                                 if (/\.gov|\.go\.|parliament|gazette|official|legislation/i.test(finalUrl)) {
                                     parsed.evidence.Source_Tier = '1';
-                                } else if (/faolex|natlex|ilo\.org|worldbank|wipo\.int/i.test(finalUrl)) {
+                                } else if (/faolex|natlex|ilo\.org|wipo\.int/i.test(finalUrl)) {
                                     parsed.evidence.Source_Tier = '2';
                                 } else {
                                     parsed.evidence.Source_Tier = '3';

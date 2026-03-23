@@ -254,11 +254,12 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
         return { supports: false, options: [] };
     }
 
-    // OpenAI direct: strict allowlist for web search models
-    // Only models verified to work with Responses API web_search tool
+    // OpenAI direct: allowlist for web search models
+    // Models verified to work with Responses API web_search tool
     const OPENAI_WEBSEARCH_ALLOWLIST = new Set([
         'gpt-4o', 'gpt-4o-mini', 'gpt-4o-search-preview',
         'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+        'gpt-4.5-preview', 'gpt-5', 'gpt-5-mini', 'gpt-5.4',
     ]);
     if (providerKey === 'openai') {
         // Check exact match first, then prefix match
@@ -269,6 +270,10 @@ function detectWebSearch(providerKey, modelId, baseUrl) {
             if (id.startsWith(allowed + '-')) {
                 return { supports: true, options: ['web_search_preview'] };
             }
+        }
+        // Future-proof: any gpt-4.x+ or gpt-5+ model likely supports web search
+        if (/^gpt-[4-9]\.\d/.test(id) || /^gpt-[5-9]/.test(id)) {
+            return { supports: true, options: ['web_search_preview'] };
         }
         return { supports: false, options: [] };
     }
