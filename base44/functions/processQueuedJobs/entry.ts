@@ -129,6 +129,34 @@ Deno.serve(async (req) => {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
+        // Self-chain: if there are still queued/running jobs, schedule another
+        // invocation so processing continues without relying on the frontend or
+        // waiting for the next automation scheduler tick.
+        const needsMoreWork =
+            lastResult?.status !== 'done' &&
+            lastResult?.status !== 'error' &&
+            batchesRun > 0;
+
+        if (needsMoreWork) {
+            try {
+                // Small delay before re-invoking to avoid tight loops
+                await sleep(2_000);
+                sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                console.log(`[processQueuedJobs] Self-chained — more work remains.`);
+            } catch (_) { /* non-fatal */ }
+        } else {
+            // Check if there are other queued jobs waiting
+            try {
+                const otherQueued = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1);
+                const otherRunning = await sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1);
+                if (otherQueued.length || otherRunning.length) {
+                    await sleep(2_000);
+                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                    console.log(`[processQueuedJobs] Self-chained — other jobs in queue.`);
+                }
+            } catch (_) { /* non-fatal */ }
+        }
+
         return Response.json({
             job_id,
             batches_run: batchesRun,

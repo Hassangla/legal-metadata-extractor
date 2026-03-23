@@ -1211,6 +1211,13 @@ Deno.serve(async (req) => {
                     }
                 }
 
+                // Fire-and-forget: kick off server-side background processing so the
+                // job runs to completion even if the user closes the browser.
+                try {
+                    const sr = base44.asServiceRole;
+                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                } catch (_) { /* non-fatal */ }
+
                 return Response.json({ job });
             }
 
@@ -2155,6 +2162,13 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 const rPending = typeof rp.pending === 'number' ? rp.pending : Math.max((resumeJob.total_rows || 0) - rDone - rErr - rProc, 0);
                 if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
+
+                // Fire-and-forget: kick off server-side background processing
+                try {
+                    const sr = base44.asServiceRole;
+                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                } catch (_) { /* non-fatal */ }
+
                 return Response.json({ job: updatedResumeJob });
             }
 

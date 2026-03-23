@@ -79,22 +79,7 @@ export default function NewRun() {
             const jobId = response.data.job.id;
             setCreatedJobId(jobId);
             setStep(4);
-            toast.success('Job created successfully');
-
-            // Kick off the first processing batch immediately so the job
-            // starts running right away. Retry once on failure.
-            for (let attempt = 0; attempt < 2; attempt++) {
-                try {
-                    await base44.functions.invoke('jobProcessor', {
-                        action: 'process',
-                        job_id: jobId,
-                    });
-                    break;
-                } catch (_) {
-                    if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
-                    // JobProgress will continue driving processing if this fails.
-                }
-            }
+            toast.success('Job created — processing will run on the server in the background');
         } catch (error) {
             toast.error('Failed to create job');
         } finally {
