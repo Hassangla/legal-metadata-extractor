@@ -1988,14 +1988,14 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 const p = pendingRows.length, er = errorRows.length;
                 const pr = ['done','paused','stopped'].includes(job.status) ? 0 : processingRows.length;
                 const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
-                // Recompute cost from actual row-level tokens
                 let realIn = 0, realOut = 0;
                 for (const r of doneRows) { realIn += r.input_tokens || 0; realOut += r.output_tokens || 0; }
                 if (realIn > 0 && Math.abs(realIn - (job.total_input_tokens || 0)) > 100) {
-                    const mIP = modelInputPrice, mOP = modelOutputPrice;
-                    const realCost = mIP > 0 ? estimateCostFromPricing(mIP, mOP, realIn, realOut) : estimateCostFromTable(job.model_id, realIn, realOut);
-                    try { await base44.entities.Job.update(job_id, { total_input_tokens: realIn, total_output_tokens: realOut, estimated_cost_usd: realCost }); } catch(_){}
-                    job.total_input_tokens = realIn; job.total_output_tokens = realOut; job.estimated_cost_usd = realCost;
+                    let mIP = 0, mOP = 0;
+                    try { const mc = await base44.entities.ModelCatalog.filter({ connection_id: job.connection_id, model_id: job.model_id }); if (mc[0]?.input_price_per_million > 0) { mIP = mc[0].input_price_per_million; mOP = mc[0].output_price_per_million || 0; } } catch(_){}
+                    const rc = mIP > 0 ? estimateCostFromPricing(mIP, mOP, realIn, realOut) : estimateCostFromTable(job.model_id, realIn, realOut);
+                    try { await base44.entities.Job.update(job_id, { total_input_tokens: realIn, total_output_tokens: realOut, estimated_cost_usd: rc }); } catch(_){}
+                    job.total_input_tokens = realIn; job.total_output_tokens = realOut; job.estimated_cost_usd = rc;
                 }
                 // Nudge if stale
                 if (['queued','running'].includes(job.status) && p > 0) {
