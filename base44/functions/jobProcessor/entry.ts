@@ -1211,11 +1211,17 @@ Deno.serve(async (req) => {
                     }
                 }
 
-                // Fire-and-forget: kick off server-side background processing so the
-                // job runs to completion even if the user closes the browser.
+                // Kick off server-side background processing so the job runs to
+                // completion even if the user closes the browser.
+                // We await with a short timeout so the HTTP request is guaranteed
+                // to reach the server before this invocation ends (fire-and-forget
+                // can be silently dropped when the serverless runtime terminates).
                 try {
                     const sr = base44.asServiceRole;
-                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                    await Promise.race([
+                        sr.functions.invoke('processQueuedJobs', {}),
+                        sleep(5_000),
+                    ]);
                 } catch (_) { /* non-fatal */ }
 
                 return Response.json({ job });
@@ -2015,6 +2021,27 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 // If job is done, treat any stuck 'processing' rows as done
                 const pr = (job.status === 'done' || job.status === 'paused') ? 0 : processingRows.length;
                 const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
+
+                // Safety-net nudge: if the job is active, has pending rows, and
+                // hasn't been updated recently, poke processQueuedJobs to ensure
+                // the processing chain hasn't silently broken.  The 30-second
+                // staleness check prevents flooding with duplicate invocations
+                // while a healthy chain is already running.
+                if ((job.status === 'queued' || job.status === 'running') && p > 0) {
+                    const lastUpdate = job.updated_date ? new Date(job.updated_date).getTime() : 0;
+                    const staleSec = (Date.now() - lastUpdate) / 1000;
+                    if (staleSec > 30) {
+                        try {
+                            const sr = base44.asServiceRole;
+                            await Promise.race([
+                                sr.functions.invoke('processQueuedJobs', {}),
+                                sleep(5_000),
+                            ]);
+                            console.log(`[getStatus] Nudged processQueuedJobs — job ${job_id} stale for ${Math.round(staleSec)}s`);
+                        } catch (_) {}
+                    }
+                }
+
                 return Response.json({ job, statusCounts });
             }
 
@@ -2093,6 +2120,15 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                     await sleep(200);
                 }
 
+                // Kick off server-side background processing for the rerun job.
+                try {
+                    const sr = base44.asServiceRole;
+                    await Promise.race([
+                        sr.functions.invoke('processQueuedJobs', {}),
+                        sleep(5_000),
+                    ]);
+                } catch (_) { /* non-fatal */ }
+
                 return Response.json({ job: newJob });
             }
 
@@ -2163,10 +2199,14 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
 
-                // Fire-and-forget: kick off server-side background processing
+                // Kick off server-side background processing (await with timeout
+                // to ensure the request reaches the server before this function ends).
                 try {
                     const sr = base44.asServiceRole;
-                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                    await Promise.race([
+                        sr.functions.invoke('processQueuedJobs', {}),
+                        sleep(5_000),
+                    ]);
                 } catch (_) { /* non-fatal */ }
 
                 return Response.json({ job: updatedResumeJob });
