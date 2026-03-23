@@ -128,24 +128,30 @@ export default function JobProgress({ jobId, onComplete }) {
         setGenerating(true);
         try {
             const response = await base44.functions.invoke('generateOutput', { job_id: jobId });
-            if (response.data._debug) console.log('generateOutput debug:', response.data._debug);
-            if (response.data.success) {
-                const byteCharacters = atob(response.data.data);
-                const byteArray = new Uint8Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {
-                    byteArray[i] = byteCharacters.charCodeAt(i);
-                }
-                const blob = new Blob([byteArray], { type: response.data.mimeType });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = response.data.filename;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                a.remove();
-                toast.success('Download started');
+            const { filename, data, totalRows, error } = response.data;
+            if (error) {
+                toast.error(error);
+                return;
             }
+            if (!data) {
+                toast.error('No data returned from server');
+                return;
+            }
+            const byteCharacters = atob(data);
+            const byteArray = new Uint8Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteArray[i] = byteCharacters.charCodeAt(i);
+            }
+            const blob = new Blob([byteArray], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename || 'output.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+            toast.success(`Downloaded ${totalRows || 0} rows`);
         } catch (err) {
             console.error('Download output error:', err);
             toast.error(err?.response?.data?.error || err?.message || 'Failed to generate output file');
