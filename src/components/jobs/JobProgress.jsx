@@ -15,6 +15,7 @@ const STATUS_CONFIG = {
     error:   { label: 'Error',      color: 'text-red-600',    bg: 'bg-red-50 border-red-200',      dot: 'bg-red-500' },
     stopped: { label: 'Stopped',    color: 'text-orange-600', bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-500' },
     paused:  { label: 'Paused',     color: 'text-slate-600',  bg: 'bg-slate-50 border-slate-200',  dot: 'bg-slate-400' },
+    stopped: { label: 'Stopped',    color: 'text-orange-600', bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-500' },
 };
 
 function formatDuration(ms) {
@@ -176,7 +177,7 @@ export default function JobProgress({ jobId, onComplete }) {
     const actualProcessed = statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows;
     const progress = job.total_rows > 0 ? Math.round((actualProcessed / job.total_rows) * 100) : 0;
     const canResume = (job.status === 'error' || job.status === 'paused' || job.status === 'stopped') && statusCounts?.pending > 0;
-    const canDownload = job.status === 'done' || actualProcessed > 0;
+    const canDownload = job.status === 'done' || job.status === 'stopped' || actualProcessed > 0;
 
     // Elapsed time since job creation
     const elapsedMs = job.created_date ? Date.now() - new Date(job.created_date).getTime() : 0;
@@ -287,8 +288,8 @@ export default function JobProgress({ jobId, onComplete }) {
                 )}
             </div>
 
-            {/* Error message */}
-            {job.error_message && job.status === 'error' && (
+            {/* Error/stopped message */}
+            {job.error_message && (job.status === 'error' || job.status === 'stopped') && (
                 <div className="flex items-start gap-2 p-3 bg-red-50 rounded-lg border border-red-100">
                     <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
                     <p className="text-xs text-red-700 leading-relaxed">{job.error_message}</p>

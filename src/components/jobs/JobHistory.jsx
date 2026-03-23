@@ -33,23 +33,23 @@ export default function JobHistory({ onSelectJob, selectedJobId }) {
         try {
             const response = await base44.functions.invoke('generateOutput', { job_id: jobId });
 
-            if (response.data.success) {
-                const byteCharacters = atob(response.data.data);
-                const byteNumbers = new Array(byteCharacters.length);
+            const { filename, data, totalRows } = response.data;
+            if (data) {
+                const byteCharacters = atob(data);
+                const byteArray = new Uint8Array(byteCharacters.length);
                 for (let i = 0; i < byteCharacters.length; i++) {
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    byteArray[i] = byteCharacters.charCodeAt(i);
                 }
-                const byteArray = new Uint8Array(byteNumbers);
-                const blob = new Blob([byteArray], { type: response.data.mimeType });
-                
+                const blob = new Blob([byteArray], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = response.data.filename;
+                a.download = filename || 'output.xlsx';
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
                 a.remove();
+                toast.success(`Downloaded ${totalRows || 0} rows`);
             }
         } catch (error) {
             console.error('Download output error:', error);
@@ -64,7 +64,7 @@ export default function JobHistory({ onSelectJob, selectedJobId }) {
         running: { icon: Play, color: 'bg-blue-100 text-blue-800' },
         done: { icon: CheckCircle, color: 'bg-green-100 text-green-800' },
         error: { icon: XCircle, color: 'bg-red-100 text-red-800' },
-        stopped: { icon: XCircle, color: 'bg-orange-100 text-orange-800' }
+        stopped: { icon: XCircle, color: 'bg-orange-100 text-orange-800' },
     };
 
     if (loading) {
