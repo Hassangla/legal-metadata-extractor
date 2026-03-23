@@ -164,6 +164,7 @@ Deno.serve(async (req) => {
             skip += PAGE_SIZE;
         }
         console.log(`[generateOutput] Fetched ${totalFetched} rows, ${nonEmptyOutputRows} with non-empty output, ${outputAoa.length - 1} total data rows`);
+        if (debugFirstRow) console.log(`[generateOutput] First row debug:`, JSON.stringify(debugFirstRow).slice(0, 500));
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outputAoa), 'Output');
