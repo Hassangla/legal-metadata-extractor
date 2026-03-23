@@ -119,7 +119,7 @@ Deno.serve(async (req) => {
             // with sr.functions.invoke when called from automation context.
             let batchResp;
             let invokeSuccess = false;
-            console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
+            console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id} via ${functionBaseUrl}/jobProcessor`);
             try {
                 const resp = await fetch(`${functionBaseUrl}/jobProcessor`, {
                     method: 'POST',
