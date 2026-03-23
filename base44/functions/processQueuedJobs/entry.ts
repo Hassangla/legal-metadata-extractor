@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
         });
 
     } catch (error) {
-        console.error('[PQJ] Error:', error.message);
+        console.error('[PQJ] Error:', error.message, 'stack:', error.stack?.slice(0, 300));
         // Return 200 even on error to prevent automation auto-disable
         return Response.json({ ok: true, error: error.message });
     }
