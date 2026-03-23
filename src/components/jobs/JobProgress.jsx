@@ -37,38 +37,18 @@ export default function JobProgress({ jobId, onComplete }) {
     const [pausing, setPausing] = useState(false);
     const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
-    const processRef = useRef(null);
     const jobIdRef = useRef(jobId);
-    const processingLock = useRef(false);
 
     useEffect(() => { jobIdRef.current = jobId; }, [jobId]);
 
-    // Actively trigger processing so the job doesn't sit in "queued"
-    const triggerProcessing = useCallback(async () => {
-        if (processingLock.current) return;
-        processingLock.current = true;
-        try {
-            await base44.functions.invoke('jobProcessor', {
-                action: 'process',
-                job_id: jobIdRef.current,
-            });
-        } catch (_) {
-            // Non-fatal — next tick will retry
-        } finally {
-            processingLock.current = false;
-        }
-    }, []);
-
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
-        if (processRef.current) clearInterval(processRef.current);
         setJob(null);
         setStatusCounts(null);
         setLoading(true);
         if (jobId) loadJobStatus();
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
-            if (processRef.current) clearInterval(processRef.current);
         };
     }, [jobId]);
 
@@ -92,30 +72,24 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     }, [onComplete]);
 
-    // Poll status every 5s and drive processing every 8s while the job is active
+    // Poll status every 5s while the job is active (processing runs server-side)
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
-        if (processRef.current) clearInterval(processRef.current);
         const isActive = job?.status === 'queued' || job?.status === 'running';
         if (isActive) {
             pollRef.current = setInterval(loadJobStatus, 5000);
-            // Drive processing: kick a new batch periodically so the job
-            // keeps moving even without the automation scheduler.
-            triggerProcessing(); // immediate kick
-            processRef.current = setInterval(triggerProcessing, 8000);
         }
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
-            if (processRef.current) clearInterval(processRef.current);
         };
-    }, [job?.status, loadJobStatus, triggerProcessing]);
+    }, [job?.status, loadJobStatus]);
 
     const handleResume = async () => {
         setResuming(true);
         try {
             await base44.functions.invoke('jobProcessor', { action: 'resume', job_id: jobId });
             await loadJobStatus();
-            toast.success('Task resumed — server will continue processing shortly');
+            toast.success('Task resumed — processing will continue on the server in the background');
         } catch {
             toast.error('Failed to resume processing');
         } finally {
@@ -229,7 +203,7 @@ export default function JobProgress({ jobId, onComplete }) {
                     <Clock className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                     <div className="text-xs text-amber-800 leading-relaxed">
                         <p className="font-medium mb-1">Task is queued and will start shortly</p>
-                        <p>The server processes tasks automatically in the background. You can safely close this tab — your task will continue running.</p>
+                        <p>Processing runs entirely on the server. You can safely close this page, browser, or device — your task will continue running and complete on its own.</p>
                     </div>
                 </div>
             )}
@@ -316,7 +290,7 @@ export default function JobProgress({ jobId, onComplete }) {
             {job.status === 'running' && (
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                    <span>Processing on server — safe to close this tab</span>
+                    <span>Processing on server — safe to close this page or device</span>
                 </div>
             )}
 
