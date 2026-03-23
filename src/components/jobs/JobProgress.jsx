@@ -90,6 +90,8 @@ export default function JobProgress({ jobId, onComplete }) {
             await base44.functions.invoke('jobProcessor', { action: 'resume', job_id: jobId });
             await loadJobStatus();
             toast.success('Task resumed — processing will continue on the server in the background');
+            // Kick off server-side processing
+            base44.functions.invoke('processQueuedJobs', {}).catch(() => {});
         } catch {
             toast.error('Failed to resume processing');
         } finally {
