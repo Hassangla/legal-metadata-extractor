@@ -1316,14 +1316,11 @@ Deno.serve(async (req) => {
                 const priorErrorCount = Number(priorProgress.error || 0);
                 const estimatedPendingBeforeBatch = Math.max((job.total_rows || 0) - Number(job.processed_rows || 0), 0);
                 await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running', progress_json: { ...priorProgress, pending: estimatedPendingBeforeBatch, processing: pendingRows.length, done: priorDoneCount, error: priorErrorCount } }));
-                let processedCount = 0;
-                let batchInputTokens = 0;
-                let batchOutputTokens = 0;
-                let batchErrorCount = 0;
-                const interRowDelay = async () => { await sleep(500); };
-
+                let processedCount = 0, batchInputTokens = 0, batchOutputTokens = 0, batchErrorCount = 0;
                 for (const row of pendingRows) {
-                    if (processedCount > 0) await interRowDelay();
+                    if (processedCount > 0) await sleep(500);
+                    const jc = await withEntityRetry(() => base44.entities.Job.filter({ id: job_id }));
+                    if (jc.length && (jc[0].status === 'stopped' || jc[0].status === 'paused')) { console.log(`[jobProcessor] Job ${job_id} ${jc[0].status} — aborting batch.`); break; }
                     try {
                         await withEntityRetry(() => base44.entities.JobRow.update(row.id, { status: 'processing' }));
                         const input = row.input_data || {};
