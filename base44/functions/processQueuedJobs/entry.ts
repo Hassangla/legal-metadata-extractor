@@ -91,20 +91,25 @@ Deno.serve(async (req) => {
             // extraction / verification / pricing logic stays in one place.
             let batchResp;
             try {
-                batchResp = await sr.functions.invoke('jobProcessor', {
+                console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
+                const invokeResult = await sr.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id,
                 });
+                // The SDK returns an axios-like response; extract .data
+                batchResp = invokeResult?.data || invokeResult;
+                console.log(`[processQueuedJobs] jobProcessor returned. remaining=${batchResp?.remaining}`);
             } catch (invokeErr) {
-                console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, invokeErr.message);
+                console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, String(invokeErr?.message || invokeErr));
                 // If the jobProcessor itself set the job to error, we respect that and stop.
                 const afterErr = await sr.entities.Job.filter({ id: job_id });
                 if (afterErr[0]?.status === 'error') {
-                    lastResult = { status: 'error', error: invokeErr.message };
+                    lastResult = { status: 'error', error: String(invokeErr?.message || invokeErr) };
                     break;
                 }
-                // Transient error — wait a bit and try again next automation tick
-                break;
+                // Transient error — wait a bit then try again in this same invocation
+                await sleep(3_000);
+                continue;
             }
 
             batchesRun++;
