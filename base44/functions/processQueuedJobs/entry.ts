@@ -136,11 +136,8 @@ Deno.serve(async (req) => {
         // terminated as soon as the Response is returned, so an un-awaited
         // outgoing HTTP request can be silently dropped — causing the chain to
         // break and jobs to stall.
-        const needsMoreWork =
-            lastResult?.status !== 'done' &&
-            lastResult?.status !== 'error' &&
-            !['paused','stopped','aborted'].includes(lastResult?.status) &&
-            batchesRun > 0;
+        const lrSt = lastResult?.status || lastResult?.job?.status;
+        const needsMoreWork = !['done','error','paused','stopped','aborted'].includes(lrSt) && batchesRun > 0;
 
         let shouldChain = needsMoreWork;
 
