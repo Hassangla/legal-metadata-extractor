@@ -41,29 +41,34 @@ const EVIDENCE_HEADERS = [
     'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
 ];
 
+// Handles values that may be double- or triple-encoded JSON strings
 function safeJson(val) {
     if (!val) return {};
-    if (typeof val === 'string') { try { return JSON.parse(val); } catch { return {}; } }
-    return val;
+    let result = val;
+    for (let i = 0; i < 3 && typeof result === 'string'; i++) {
+        try { result = JSON.parse(result); } catch { return {}; }
+    }
+    return (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
 }
 
 function rowToOutputAoaRow(row) {
     const e = safeJson(row.evidence_json);
+    const o = safeJson(row.output_json);
     const input = safeJson(row.input_data);
     return [
         '',
-        xlCell(e.Economy_Code),
-        xlCell(e.Economy || input.Economy),
-        xlCell(e.Final_Language_Doc),
-        xlCell(e.Final_Instrument_Full_Name_Original_Language),
-        xlCell(e.Final_Instrument_Published_Name),
-        xlCell(e.Final_Instrument_URL),
-        xlCell(e.Final_Enactment_Date),
-        xlCell(e.Final_Date_of_Entry_in_Force),
-        xlCell(e.Final_Repeal_Year),
-        xlCell(e.Final_Current_Status),
-        xlCell(e.Final_Public),
-        xlCell(e.Final_Flag),
+        xlCell(e.Economy_Code || o.Economy_Code),
+        xlCell(e.Economy || o.Economy || input.Economy),
+        xlCell(e.Final_Language_Doc || o.Language_Doc),
+        xlCell(e.Final_Instrument_Full_Name_Original_Language || o.Instrument_Full_Name_Original_Language),
+        xlCell(e.Final_Instrument_Published_Name || o.Instrument_Published_Name),
+        xlCell(e.Final_Instrument_URL || o.Instrument_URL),
+        xlCell(e.Final_Enactment_Date || o.Enactment_Date),
+        xlCell(e.Final_Date_of_Entry_in_Force || o.Date_of_Entry_in_Force),
+        xlCell(e.Final_Repeal_Year || o.Repeal_Year),
+        xlCell(e.Final_Current_Status || o.Current_Status),
+        xlCell(e.Final_Public || o.Public),
+        xlCell(e.Final_Flag || o.Flag),
     ];
 }
 
@@ -123,6 +128,7 @@ Deno.serve(async (req) => {
         const evidenceAoa = [EVIDENCE_HEADERS];
 
         let skip = 0;
+        let debugFirstRow = null;
         while (true) {
             let page = await base44.entities.JobRow.filter(
                 { job_id },
@@ -134,6 +140,16 @@ Deno.serve(async (req) => {
             if (!Array.isArray(page) || !page.length) break;
 
             for (const row of page) {
+                if (!debugFirstRow) {
+                    debugFirstRow = {
+                        keys: Object.keys(row),
+                        evidence_json_type: typeof row.evidence_json,
+                        output_json_type: typeof row.output_json,
+                        input_data_type: typeof row.input_data,
+                        evidence_json_preview: String(row.evidence_json).slice(0, 200),
+                        output_json_preview: String(row.output_json).slice(0, 200),
+                    };
+                }
                 outputAoa.push(rowToOutputAoaRow(row));
                 evidenceAoa.push(rowToEvidenceAoaRow(row));
             }
@@ -168,7 +184,8 @@ Deno.serve(async (req) => {
             success: true,
             filename,
             data: base64Data,
-            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            _debug: { totalDataRows: outputAoa.length - 1, firstRow: debugFirstRow },
         });
     } catch (error) {
         return Response.json({ error: error.message }, { status: 500 });
