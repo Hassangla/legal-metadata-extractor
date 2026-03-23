@@ -1239,6 +1239,9 @@ Deno.serve(async (req) => {
                 if (job.status === 'paused') {
                     return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
                 }
+                if (job.status === 'stopped') {
+                    return Response.json({ error: 'Job has been stopped; resume it first' }, { status: 400 });
+                }
 
                 // Wrap entire processing in try-catch so fatal errors set job to 'error'
                 // instead of leaving it stuck in 'running'.
@@ -2019,7 +2022,7 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 ]);
                 const p = pendingRows.length, er = errorRows.length;
                 // If job is done, treat any stuck 'processing' rows as done
-                const pr = (job.status === 'done' || job.status === 'paused') ? 0 : processingRows.length;
+                const pr = (job.status === 'done' || job.status === 'paused' || job.status === 'stopped') ? 0 : processingRows.length;
                 const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
 
                 // Safety-net nudge: if the job is active, has pending rows, and
