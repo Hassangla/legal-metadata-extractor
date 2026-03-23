@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 import * as XLSX from 'npm:xlsx@0.18.5';
 
 function uint8ArrayToBase64(uint8Array) {
