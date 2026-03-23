@@ -97,10 +97,9 @@ Deno.serve(async (req) => {
                 });
             } catch (invokeErr) {
                 console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, invokeErr.message);
-                // If the jobProcessor itself set the job to error, we respect that and stop.
                 const afterErr = await sr.entities.Job.filter({ id: job_id });
-                if (afterErr[0]?.status === 'error') {
-                    lastResult = { status: 'error', error: invokeErr.message };
+                if (['error','stopped','paused','done'].includes(afterErr[0]?.status)) {
+                    lastResult = { status: afterErr[0].status };
                     break;
                 }
                 // Transient error — wait a bit and try again next automation tick
