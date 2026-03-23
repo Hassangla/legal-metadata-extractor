@@ -281,7 +281,7 @@ export default function JobProgress({ jobId, onComplete }) {
                         </span>
                         {job.estimated_cost_usd > 0 && (
                             <span className="ml-auto font-medium text-green-700">
-                                ~${job.estimated_cost_usd < 0.01 ? '<0.01' : job.estimated_cost_usd.toFixed(4)}
+                                ~${job.estimated_cost_usd < 0.01 ? '<0.01' : job.estimated_cost_usd < 1 ? job.estimated_cost_usd.toFixed(4) : job.estimated_cost_usd.toFixed(2)}
                             </span>
                         )}
                     </div>
