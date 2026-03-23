@@ -141,9 +141,7 @@ Deno.serve(async (req) => {
         const needsMoreWork =
             lastResult?.status !== 'done' &&
             lastResult?.status !== 'error' &&
-            lastResult?.status !== 'paused' &&
-            lastResult?.status !== 'stopped' &&
-            lastResult?.status !== 'aborted' &&
+            !['paused','stopped','aborted'].includes(lastResult?.status) &&
             batchesRun > 0;
 
         let shouldChain = needsMoreWork;
