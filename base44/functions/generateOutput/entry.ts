@@ -132,19 +132,24 @@ Deno.serve(async (req) => {
         let totalFetched = 0;
         let nonEmptyOutputRows = 0;
         while (true) {
-            console.log(`[generateOutput] Fetching page: job_id=${job_id}, skip=${skip}, PAGE_SIZE=${PAGE_SIZE}`);
-            let page = await base44.entities.JobRow.filter(
-                { job_id },
-                'row_index',
-                PAGE_SIZE,
-                skip
-            );
-            console.log(`[generateOutput] Raw page type: ${typeof page}, isArray: ${Array.isArray(page)}, length: ${Array.isArray(page) ? page.length : 'N/A'}`);
-            if (page && typeof page === 'object' && !Array.isArray(page)) {
-                console.log(`[generateOutput] Page is object, keys: ${Object.keys(page).slice(0, 10).join(', ')}`);
+            let page;
+            try {
+                page = await base44.entities.JobRow.filter(
+                    { job_id: String(job_id) },
+                    'row_index',
+                    PAGE_SIZE,
+                    skip
+                );
+            } catch (filterErr) {
+                console.error(`[generateOutput] Filter error at skip=${skip}: ${filterErr.message}`);
+                break;
             }
             if (typeof page === 'string') { try { page = JSON.parse(page); } catch { page = []; } }
-            if (!Array.isArray(page) || !page.length) break;
+            if (!Array.isArray(page)) {
+                console.error(`[generateOutput] Unexpected page type: ${typeof page}, value: ${JSON.stringify(page).slice(0, 200)}`);
+                break;
+            }
+            if (!page.length) break;
             totalFetched += page.length;
 
             for (const row of page) {
