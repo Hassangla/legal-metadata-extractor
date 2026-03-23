@@ -2001,37 +2001,29 @@ Return ONLY valid JSON — no markdown, no explanation.`;
 
                 const job = jobs[0];
 
-                // Count actual JobRow records — progress_json.done can drift due to retries
-                const [pendingRows, processingRows, errorRows] = await Promise.all([
+                const [pendingRows, processingRows, errorRows, doneRows] = await Promise.all([
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0)),
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'processing' }, 'row_index', 5000, 0)),
                     withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0)),
+                    withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'done' }, 'row_index', 5000, 0)),
                 ]);
                 const p = pendingRows.length, er = errorRows.length;
-                // If job is done, treat any stuck 'processing' rows as done
-                const pr = (job.status === 'done' || job.status === 'paused' || job.status === 'stopped') ? 0 : processingRows.length;
+                const pr = ['done','paused','stopped'].includes(job.status) ? 0 : processingRows.length;
                 const statusCounts = { pending: p, processing: pr, error: er, done: Math.max(0, (job.total_rows || 0) - p - pr - er) };
-
-                // Safety-net nudge: if the job is active, has pending rows, and
-                // hasn't been updated recently, poke processQueuedJobs to ensure
-                // the processing chain hasn't silently broken.  The 30-second
-                // staleness check prevents flooding with duplicate invocations
-                // while a healthy chain is already running.
-                if ((job.status === 'queued' || job.status === 'running') && p > 0) {
-                    const lastUpdate = job.updated_date ? new Date(job.updated_date).getTime() : 0;
-                    const staleSec = (Date.now() - lastUpdate) / 1000;
-                    if (staleSec > 30) {
-                        try {
-                            const sr = base44.asServiceRole;
-                            await Promise.race([
-                                sr.functions.invoke('processQueuedJobs', {}),
-                                sleep(5_000),
-                            ]);
-                            console.log(`[getStatus] Nudged processQueuedJobs — job ${job_id} stale for ${Math.round(staleSec)}s`);
-                        } catch (_) {}
-                    }
+                // Recompute cost from actual row-level tokens
+                let realIn = 0, realOut = 0;
+                for (const r of doneRows) { realIn += r.input_tokens || 0; realOut += r.output_tokens || 0; }
+                if (realIn > 0 && Math.abs(realIn - (job.total_input_tokens || 0)) > 100) {
+                    const mIP = modelInputPrice, mOP = modelOutputPrice;
+                    const realCost = mIP > 0 ? estimateCostFromPricing(mIP, mOP, realIn, realOut) : estimateCostFromTable(job.model_id, realIn, realOut);
+                    try { await base44.entities.Job.update(job_id, { total_input_tokens: realIn, total_output_tokens: realOut, estimated_cost_usd: realCost }); } catch(_){}
+                    job.total_input_tokens = realIn; job.total_output_tokens = realOut; job.estimated_cost_usd = realCost;
                 }
-
+                // Nudge if stale
+                if (['queued','running'].includes(job.status) && p > 0) {
+                    const staleSec = (Date.now() - (job.updated_date ? new Date(job.updated_date).getTime() : 0)) / 1000;
+                    if (staleSec > 30) { try { await Promise.race([base44.asServiceRole.functions.invoke('processQueuedJobs', {}), sleep(5_000)]); } catch(_){} }
+                }
                 return Response.json({ job, statusCounts });
             }
 
