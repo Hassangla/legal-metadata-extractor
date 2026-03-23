@@ -2092,7 +2092,7 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                     await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk));
                     await sleep(200);
                 }
-
+                try { base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {}); } catch (_) {}
                 return Response.json({ job: newJob });
             }
 
