@@ -1233,20 +1233,10 @@ Deno.serve(async (req) => {
                 if (!jobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
 
                 const job = jobs[0];
-                if (job.status === 'done') {
-                    return Response.json({ job, message: 'Job already completed' });
+                if (['done','paused','stopped'].includes(job.status)) {
+                    return Response.json({ job, message: `Job is ${job.status}`, remaining: 0 });
                 }
-                if (job.status === 'paused') {
-                    return Response.json({ error: 'Job is paused; resume it first' }, { status: 400 });
-                }
-                if (job.status === 'stopped') {
-                    return Response.json({ error: 'Job has been stopped; resume it first' }, { status: 400 });
-                }
-
-                // Wrap entire processing in try-catch so fatal errors set job to 'error'
-                // instead of leaving it stuck in 'running'.
                 try {
-
                 await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'running' }));
 
                 const connections = await withEntityRetry(() => base44.entities.APIConnection.filter({ id: job.connection_id }));
