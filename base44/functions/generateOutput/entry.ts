@@ -13,7 +13,6 @@ function uint8ArrayToBase64(uint8Array) {
     return btoa(binaryString);
 }
 
-// Excel hard limit: 32,767 chars per cell
 const xlCell = (v) => {
     if (v === null || v === undefined) return '';
     const s = String(v);
@@ -41,7 +40,6 @@ const EVIDENCE_HEADERS = [
     'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
 ];
 
-// Handles values that may be double- or triple-encoded JSON strings
 function safeJson(val) {
     if (!val) return {};
     let result = val;
@@ -109,6 +107,43 @@ function rowToEvidenceAoaRow(row) {
     ];
 }
 
+// Fetch all JobRows for a given job_id using paginated list + client-side filter.
+// This works around SDK .filter() returning empty results in some contexts.
+async function fetchAllJobRows(sr, jobId) {
+    const PAGE = 200;
+    const allRows = [];
+    let skip = 0;
+    
+    while (true) {
+        const page = await sr.entities.JobRow.filter({ job_id: jobId }, 'row_index', PAGE, skip);
+        if (!Array.isArray(page) || page.length === 0) break;
+        for (const r of page) allRows.push(r);
+        if (page.length < PAGE) break;
+        skip += PAGE;
+    }
+
+    // If filter returned results, use them
+    if (allRows.length > 0) {
+        console.log(`[generateOutput] filter() returned ${allRows.length} rows for job ${jobId}`);
+        return allRows;
+    }
+
+    // Fallback: list all JobRows and filter client-side
+    console.log(`[generateOutput] filter() returned 0 — falling back to list+client-filter`);
+    skip = 0;
+    while (true) {
+        const page = await sr.entities.JobRow.list('row_index', PAGE, skip);
+        if (!Array.isArray(page) || page.length === 0) break;
+        for (const r of page) {
+            if (String(r.job_id) === String(jobId)) allRows.push(r);
+        }
+        if (page.length < PAGE) break;
+        skip += PAGE;
+    }
+    console.log(`[generateOutput] list+filter found ${allRows.length} rows for job ${jobId}`);
+    return allRows;
+}
+
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
@@ -116,74 +151,26 @@ Deno.serve(async (req) => {
         if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
         const { job_id } = await req.json();
+        console.log(`[generateOutput] START job_id=${job_id}`);
         if (!job_id) return Response.json({ error: 'job_id is required' }, { status: 400 });
 
         const jobs = await base44.entities.Job.filter({ id: job_id });
         if (jobs.length === 0) return Response.json({ error: 'Job not found' }, { status: 404 });
         const job = jobs[0];
 
-        // Fetch rows in pages of 200 to avoid memory limits
-        const PAGE_SIZE = 200;
+        const sr = base44.asServiceRole;
+        const rows = await fetchAllJobRows(sr, job_id);
+        rows.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
+
+        console.log(`[generateOutput] Total rows fetched: ${rows.length}`);
+
         const outputAoa = [OUTPUT_HEADERS];
         const evidenceAoa = [EVIDENCE_HEADERS];
 
-        let skip = 0;
-        let debugFirstRow = null;
-        let totalFetched = 0;
-        let nonEmptyOutputRows = 0;
-        // Use service role for reading JobRows to avoid permission issues
-        const sr = base44.asServiceRole;
-        while (true) {
-            let page;
-            try {
-                // Try listing all and filtering client-side
-                const allRows = await sr.entities.JobRow.list('row_index', PAGE_SIZE);
-                console.log(`[generateOutput] list() returned ${allRows.length} rows. First row job_id: ${allRows[0]?.job_id}`);
-                console.log(`[generateOutput] Looking for job_id: ${job_id}`);
-                console.log(`[generateOutput] Match test: ${allRows[0]?.job_id === job_id}, types: ${typeof allRows[0]?.job_id} vs ${typeof job_id}`);
-                
-                page = await sr.entities.JobRow.filter(
-                    { job_id: job_id },
-                    'row_index',
-                    PAGE_SIZE,
-                    skip
-                );
-                console.log(`[generateOutput] filter() returned ${Array.isArray(page) ? page.length : typeof page} rows`);
-            } catch (filterErr) {
-                console.error(`[generateOutput] Filter error at skip=${skip}: ${filterErr.message}`);
-                break;
-            }
-            if (typeof page === 'string') { try { page = JSON.parse(page); } catch { page = []; } }
-            if (!Array.isArray(page)) {
-                console.error(`[generateOutput] Unexpected page type: ${typeof page}, value: ${JSON.stringify(page).slice(0, 200)}`);
-                break;
-            }
-            if (!page.length) break;
-            totalFetched += page.length;
-
-            for (const row of page) {
-                if (!debugFirstRow) {
-                    debugFirstRow = {
-                        keys: Object.keys(row),
-                        evidence_json_type: typeof row.evidence_json,
-                        output_json_type: typeof row.output_json,
-                        input_data_type: typeof row.input_data,
-                        evidence_json_preview: JSON.stringify(row.evidence_json).slice(0, 300),
-                        output_json_preview: JSON.stringify(row.output_json).slice(0, 300),
-                    };
-                }
-                const outputRow = rowToOutputAoaRow(row);
-                const hasContent = outputRow.some((cell, i) => i > 0 && cell !== '');
-                if (hasContent) nonEmptyOutputRows++;
-                outputAoa.push(outputRow);
-                evidenceAoa.push(rowToEvidenceAoaRow(row));
-            }
-
-            if (page.length < PAGE_SIZE) break;
-            skip += PAGE_SIZE;
+        for (const row of rows) {
+            outputAoa.push(rowToOutputAoaRow(row));
+            evidenceAoa.push(rowToEvidenceAoaRow(row));
         }
-        console.log(`[generateOutput] Fetched ${totalFetched} rows, ${nonEmptyOutputRows} with non-empty output, ${outputAoa.length - 1} total data rows`);
-        if (debugFirstRow) console.log(`[generateOutput] First row debug:`, JSON.stringify(debugFirstRow).slice(0, 500));
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outputAoa), 'Output');
@@ -207,21 +194,13 @@ Deno.serve(async (req) => {
         const timestamp = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}-${parts.minute}-${parts.second}`;
         const filename = `legal_metadata_output_${timestamp}.xlsx`;
 
-        const base64Len = base64Data.length;
-
-        // TEMP DEBUG: return only debug info
         return Response.json({
-            _debug: {
-                totalDataRows: outputAoa.length - 1,
-                totalFetched,
-                nonEmptyOutputRows,
-                firstRow: debugFirstRow,
-                base64Size: base64Len,
-                sampleOutputRow: outputAoa.length > 1 ? outputAoa[1] : null,
-                sampleEvidenceRow: evidenceAoa.length > 1 ? evidenceAoa[1]?.slice(0, 5) : null,
-            },
+            filename,
+            data: base64Data,
+            totalRows: rows.length,
         });
     } catch (error) {
+        console.error(`[generateOutput] Error: ${error.message}`);
         return Response.json({ error: error.message }, { status: 500 });
     }
 });
