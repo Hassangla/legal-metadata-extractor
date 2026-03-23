@@ -136,12 +136,19 @@ Deno.serve(async (req) => {
         while (true) {
             let page;
             try {
+                // Try listing all and filtering client-side
+                const allRows = await sr.entities.JobRow.list('row_index', PAGE_SIZE);
+                console.log(`[generateOutput] list() returned ${allRows.length} rows. First row job_id: ${allRows[0]?.job_id}`);
+                console.log(`[generateOutput] Looking for job_id: ${job_id}`);
+                console.log(`[generateOutput] Match test: ${allRows[0]?.job_id === job_id}, types: ${typeof allRows[0]?.job_id} vs ${typeof job_id}`);
+                
                 page = await sr.entities.JobRow.filter(
-                    { job_id: String(job_id) },
+                    { job_id: job_id },
                     'row_index',
                     PAGE_SIZE,
                     skip
                 );
+                console.log(`[generateOutput] filter() returned ${Array.isArray(page) ? page.length : typeof page} rows`);
             } catch (filterErr) {
                 console.error(`[generateOutput] Filter error at skip=${skip}: ${filterErr.message}`);
                 break;
