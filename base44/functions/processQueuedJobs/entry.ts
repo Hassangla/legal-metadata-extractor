@@ -81,13 +81,15 @@ Deno.serve(async (req) => {
             }
 
             // Recover stale 'processing' rows that may have been left by a crashed batch.
-            // If a row has been in 'processing' for too long, reset it to 'pending'.
             const processingRows = await sr.entities.JobRow.filter(
                 { job_id, status: 'processing' },
                 'row_index',
                 50,
                 0
             );
+            if (processingRows.length > 0) {
+                console.log(`[processQueuedJobs] Resetting ${processingRows.length} stale processing rows to pending`);
+            }
             for (const staleRow of processingRows) {
                 try {
                     await sr.entities.JobRow.update(staleRow.id, { status: 'pending' });
@@ -101,6 +103,7 @@ Deno.serve(async (req) => {
                 1,
                 0
             );
+            console.log(`[processQueuedJobs] Pending rows: ${pendingRows.length}`);
             if (!pendingRows.length) {
                 // No pending rows — mark done.
                 await sr.entities.Job.update(job_id, {
