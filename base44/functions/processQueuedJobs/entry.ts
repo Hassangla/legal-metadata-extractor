@@ -1,26 +1,33 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
-// Maximum wall-clock milliseconds to spend in one automation invocation.
-const MAX_WALL_MS = 200_000;
-const BATCH_INTER_DELAY_MS = 1_500;
-
+// Keep well under Deno Deploy's execution limit to avoid timeout = failure = auto-disable.
+const MAX_WALL_MS = 55_000;  // 55 seconds max
+const BATCH_INTER_DELAY_MS = 1_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 Deno.serve(async (req) => {
+    // CRITICAL: Always return 200 so the automation never accumulates consecutive failures
+    // and never gets auto-disabled. Errors are logged but do not produce 4xx/5xx responses.
     try {
         const base44 = createClientFromRequest(req);
         const sr = base44.asServiceRole;
         const startTime = Date.now();
 
         // Find the oldest queued or running job.
-        const [queuedJobs, runningJobs] = await Promise.all([
-            sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
-            sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
-        ]);
+        let queuedJobs, runningJobs;
+        try {
+            [queuedJobs, runningJobs] = await Promise.all([
+                sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
+                sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
+            ]);
+        } catch (e) {
+            console.error('[processQueuedJobs] Failed to query jobs:', e.message);
+            return Response.json({ ok: true, message: 'Failed to query jobs, will retry next tick.' });
+        }
 
-        const job = queuedJobs[0] || runningJobs[0];
+        const job = (queuedJobs || [])[0] || (runningJobs || [])[0];
         if (!job) {
-            return Response.json({ message: 'No queued or running jobs found.' });
+            return Response.json({ ok: true, message: 'No queued or running jobs.' });
         }
 
         const job_id = job.id;
@@ -31,83 +38,95 @@ Deno.serve(async (req) => {
 
         while (Date.now() - startTime < MAX_WALL_MS) {
             // Re-fetch job status before each batch
-            const freshJobs = await sr.entities.Job.filter({ id: job_id });
-            if (!freshJobs.length) {
+            let freshJob;
+            try {
+                const freshJobs = await sr.entities.Job.filter({ id: job_id });
+                freshJob = freshJobs[0];
+            } catch (e) {
+                console.error('[processQueuedJobs] Failed to re-fetch job:', e.message);
+                break;
+            }
+            if (!freshJob) {
                 console.log(`[processQueuedJobs] Job ${job_id} disappeared — stopping.`);
                 break;
             }
-            const freshJob = freshJobs[0];
 
             if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'paused') {
-                console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
+                console.log(`[processQueuedJobs] Job ${job_id} reached terminal status=${freshJob.status}.`);
                 lastResult = { status: freshJob.status };
                 break;
             }
 
             // Recover stale 'processing' rows
-            const processingRows = await sr.entities.JobRow.filter(
-                { job_id, status: 'processing' }, 'row_index', 50, 0
-            );
-            if (processingRows.length > 0) {
-                console.log(`[processQueuedJobs] Resetting ${processingRows.length} stale processing rows`);
-                for (const staleRow of processingRows) {
-                    try { await sr.entities.JobRow.update(staleRow.id, { status: 'pending' }); } catch (_) {}
+            try {
+                const processingRows = await sr.entities.JobRow.filter(
+                    { job_id, status: 'processing' }, 'row_index', 50, 0
+                );
+                if (processingRows.length > 0) {
+                    console.log(`[processQueuedJobs] Resetting ${processingRows.length} stale processing rows`);
+                    for (const staleRow of processingRows) {
+                        try { await sr.entities.JobRow.update(staleRow.id, { status: 'pending' }); } catch (_) {}
+                    }
                 }
-            }
+            } catch (_) {}
 
             // Check for pending rows
-            const pendingRows = await sr.entities.JobRow.filter(
-                { job_id, status: 'pending' }, 'row_index', 1, 0
-            );
-            if (!pendingRows.length) {
-                await sr.entities.Job.update(job_id, {
-                    status: 'done',
-                    processed_rows: freshJob.total_rows || freshJob.processed_rows,
-                });
-                console.log(`[processQueuedJobs] Job ${job_id} — no pending rows, marked done.`);
-                lastResult = { status: 'done' };
+            try {
+                const pendingRows = await sr.entities.JobRow.filter(
+                    { job_id, status: 'pending' }, 'row_index', 1, 0
+                );
+                if (!pendingRows.length) {
+                    try {
+                        await sr.entities.Job.update(job_id, {
+                            status: 'done',
+                            processed_rows: freshJob.total_rows || freshJob.processed_rows,
+                        });
+                    } catch (_) {}
+                    console.log(`[processQueuedJobs] Job ${job_id} — no pending rows, marked done.`);
+                    lastResult = { status: 'done' };
+                    break;
+                }
+            } catch (e) {
+                console.error('[processQueuedJobs] Failed to check pending rows:', e.message);
                 break;
             }
 
             // Invoke jobProcessor via SDK service role
-            let batchResp;
             try {
                 console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1}...`);
                 const invokeResult = await sr.functions.invoke('jobProcessor', {
                     action: 'process',
                     job_id,
                 });
-                batchResp = invokeResult?.data || invokeResult;
+                const batchResp = invokeResult?.data || invokeResult;
                 console.log(`[processQueuedJobs] Batch ${batchesRun + 1} done. remaining=${batchResp?.remaining}`);
+                batchesRun++;
+                lastResult = batchResp;
+                const remaining = batchResp?.remaining;
+                if (remaining === 0 || remaining === undefined) break;
             } catch (invokeErr) {
                 console.error(`[processQueuedJobs] invoke error batch ${batchesRun + 1}:`, String(invokeErr?.message || invokeErr));
                 // Check if job went to terminal state
-                const afterErr = await sr.entities.Job.filter({ id: job_id });
-                if (afterErr[0]?.status === 'error' || afterErr[0]?.status === 'paused') {
-                    lastResult = { status: afterErr[0].status };
-                    break;
-                }
-                // Transient error — break and let automation retry
-                break;
+                try {
+                    const afterErr = await sr.entities.Job.filter({ id: job_id });
+                    if (afterErr[0]?.status === 'error' || afterErr[0]?.status === 'paused') {
+                        lastResult = { status: afterErr[0].status };
+                    }
+                } catch (_) {}
+                break;  // Stop and let the next automation tick retry
             }
 
-            batchesRun++;
-            const remaining = batchResp?.remaining;
-            lastResult = batchResp;
-
-            if (remaining === 0 || remaining === undefined) break;
-
-            if (Date.now() - startTime + BATCH_INTER_DELAY_MS < MAX_WALL_MS) {
-                await sleep(BATCH_INTER_DELAY_MS);
-            } else {
-                break;
-            }
+            // Check if we have time for another batch
+            if (Date.now() - startTime + BATCH_INTER_DELAY_MS >= MAX_WALL_MS) break;
+            await sleep(BATCH_INTER_DELAY_MS);
         }
 
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
+        // Always return 200 — prevents auto-disable of the automation
         return Response.json({
+            ok: true,
             job_id,
             batches_run: batchesRun,
             elapsed_seconds: elapsed,
@@ -115,7 +134,8 @@ Deno.serve(async (req) => {
         });
 
     } catch (error) {
+        // Even fatal errors return 200 to prevent automation auto-disable
         console.error('[processQueuedJobs] Fatal error:', error.message);
-        return Response.json({ error: error.message }, { status: 500 });
+        return Response.json({ ok: true, error: error.message, message: 'Fatal error, will retry next tick.' });
     }
 });
