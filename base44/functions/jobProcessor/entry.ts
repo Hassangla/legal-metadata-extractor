@@ -1514,15 +1514,6 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                                 throw new Error(`Responses API failed: ${JSON.stringify(data.error || data.incomplete_details || 'unknown').slice(0, 300)}`);
                             }
 
-                            // Diagnostic: log Responses API structure to understand web search behavior
-                            if (isResponsesApi) {
-                                const outputTypes = Array.isArray(data.output) ? data.output.map(i => `${i.type}${i.status ? ':' + i.status : ''}`).join(', ') : 'no-output';
-                                console.log(`[DIAG] Responses API row=${row.row_index}: status=${data.status}, output_types=[${outputTypes}], has_output_text=${!!data.output_text}`);
-                                // Log the request URL and whether tools were sent
-                                const reqBody = JSON.parse(init.body);
-                                console.log(`[DIAG] Request: model=${reqBody.model}, tools=${JSON.stringify(reqBody.tools)}, url=${url}`);
-                            }
-
                             if (data.usage) {
                                 inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
                                 outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
