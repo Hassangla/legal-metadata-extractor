@@ -1121,7 +1121,7 @@ const MODEL_PRICING = {
     'o1-preview':{input:15.00,output:60.00},'o3':{input:2.00,output:8.00},'o3-mini':{input:1.10,output:4.40},'o4-mini':{input:1.10,output:4.40},
     'claude-sonnet-4':{input:3.00,output:15.00},'claude-opus-4':{input:15.00,output:75.00},'claude-haiku-3.5':{input:0.80,output:4.00},
     'claude-3-5-sonnet':{input:3.00,output:15.00},'claude-3-5-haiku':{input:0.80,output:4.00},'claude-3-opus':{input:15.00,output:75.00},
-    'gemini-2.5-pro':{input:1.25,output:10.00},'gemini-2.5-flash':{input:0.15,output:0.60},'gemini-2.0-flash':{input:0.10,output:0.40},
+    'gemini-2.5-pro':{input:1.25,output:10.00},'gemini-2.5-pro-preview':{input:1.25,output:10.00},'gemini-2.5-flash':{input:0.15,output:3.50},'gemini-2.5-flash-preview':{input:0.15,output:3.50},'gemini-2.0-flash':{input:0.10,output:0.40},
     'gemini-1.5-pro':{input:1.25,output:5.00},'gemini-1.5-flash':{input:0.075,output:0.30},
     'moonshot-v1-auto':{input:0.55,output:0.55},'moonshot-v1-8k':{input:0.17,output:0.17},'moonshot-v1-32k':{input:0.33,output:0.33},
     'moonshot-v1-128k':{input:0.83,output:0.83},'kimi-latest':{input:0.55,output:0.55},
