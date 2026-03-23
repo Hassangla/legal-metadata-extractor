@@ -8,7 +8,32 @@ const BATCH_INTER_DELAY_MS = 1_500; // small pause between batches
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Extract auth headers from the incoming request so we can forward them
+// to jobProcessor via direct HTTP fetch (avoids 403 issues with sr.functions.invoke).
+function extractAuthHeaders(req) {
+    const headers = {};
+    const auth = req.headers.get('authorization');
+    if (auth) headers['Authorization'] = auth;
+    const appId = req.headers.get('x-base44-app-id') || req.headers.get('x-app-id');
+    if (appId) headers['x-base44-app-id'] = appId;
+    // Forward any service-role related headers
+    for (const [key, value] of req.headers.entries()) {
+        const k = key.toLowerCase();
+        if (k.startsWith('x-base44') || k === 'authorization') {
+            headers[key] = value;
+        }
+    }
+    headers['Content-Type'] = 'application/json';
+    return headers;
+}
+
 Deno.serve(async (req) => {
+    // Clone request body/headers before consuming
+    const reqHeaders = extractAuthHeaders(req);
+    const reqUrl = new URL(req.url);
+    // Derive the base URL for sibling function calls
+    const functionBaseUrl = `${reqUrl.protocol}//${reqUrl.host}`;
+
     try {
         const base44 = createClientFromRequest(req);
 
