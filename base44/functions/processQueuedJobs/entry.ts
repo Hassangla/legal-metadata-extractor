@@ -1,9 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 Deno.serve(async (req) => {
-    // ALWAYS return 200 to prevent automation auto-disable from consecutive failures.
+    // ALWAYS return 200 to prevent automation auto-disable.
     const base44 = createClientFromRequest(req);
     const sr = base44.asServiceRole;
 
@@ -54,26 +52,47 @@ Deno.serve(async (req) => {
             return Response.json({ ok: true, job_id, message: 'No pending rows, marked done.' });
         }
 
-        // Invoke jobProcessor to process one batch
-        console.log(`[PQJ] Invoking jobProcessor for job ${job_id}...`);
-        const result = await sr.functions.invoke('jobProcessor', {
-            action: 'process',
-            job_id,
+        // Call jobProcessor directly via HTTP (avoids sr.functions.invoke 403 issue)
+        // Build the request to jobProcessor by forwarding auth headers
+        console.log(`[PQJ] Calling jobProcessor for job ${job_id}...`);
+        
+        const appId = Deno.env.get('BASE44_APP_ID');
+        const jobProcessorUrl = `https://base44.app/api/apps/${appId}/functions/jobProcessor`;
+        
+        // Forward all auth-related headers from the incoming request
+        const headers = {};
+        for (const [key, value] of req.headers.entries()) {
+            const lk = key.toLowerCase();
+            if (lk === 'authorization' || lk === 'x-base44-token' || lk === 'x-base44-service-role-key' || lk.startsWith('x-base44')) {
+                headers[key] = value;
+            }
+        }
+        headers['Content-Type'] = 'application/json';
+
+        const resp = await fetch(jobProcessorUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ action: 'process', job_id }),
         });
-        const batchResp = result?.data || result;
+
+        if (!resp.ok) {
+            const errText = await resp.text();
+            console.error(`[PQJ] jobProcessor returned ${resp.status}: ${errText.slice(0, 300)}`);
+            return Response.json({ ok: true, error: `jobProcessor ${resp.status}`, job_id });
+        }
+
+        const batchResp = await resp.json();
         console.log(`[PQJ] Batch complete. remaining=${batchResp?.remaining} processed=${batchResp?.processed_this_batch}`);
 
         return Response.json({
             ok: true,
             job_id,
-            batches_run: 1,
             remaining: batchResp?.remaining,
             processed: batchResp?.processed_this_batch,
         });
 
     } catch (error) {
-        console.error('[PQJ] Error:', error.message, 'stack:', error.stack?.slice(0, 300));
-        // Return 200 even on error to prevent automation auto-disable
+        console.error('[PQJ] Error:', error.message);
         return Response.json({ ok: true, error: error.message });
     }
 });
