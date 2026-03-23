@@ -128,6 +128,7 @@ export default function JobProgress({ jobId, onComplete }) {
         setGenerating(true);
         try {
             const response = await base44.functions.invoke('generateOutput', { job_id: jobId });
+            if (response.data._debug) console.log('generateOutput debug:', response.data._debug);
             if (response.data.success) {
                 const byteCharacters = atob(response.data.data);
                 const byteArray = new Uint8Array(byteCharacters.length);
