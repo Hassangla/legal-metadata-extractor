@@ -113,8 +113,8 @@ Deno.serve(async (req) => {
             }
 
             batchesRun++;
-            const remaining = batchResp?.remaining ?? batchResp?.data?.remaining;
-            lastResult = batchResp?.data || batchResp;
+            const remaining = batchResp?.remaining;
+            lastResult = batchResp;
 
             console.log(`[processQueuedJobs] Batch ${batchesRun} done. remaining=${remaining}`);
 
