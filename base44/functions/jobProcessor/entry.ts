@@ -2143,22 +2143,16 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                 if (!resumeJobs.length) return Response.json({ error: 'Job not found' }, { status: 404 });
                 const resumeJob = resumeJobs[0];
                 if (resumeJob.status === 'done') return Response.json({ error: 'Job is already completed' }, { status: 400 });
+                // Reset "Stopped by user" error rows back to pending
+                if (resumeJob.status === 'stopped') {
+                    const sr2 = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'error' }, 'row_index', 5000, 0));
+                    for (const r of sr2) { if ((r.error_message||'').includes('Stopped by user')) await withEntityRetry(() => base44.entities.JobRow.update(r.id, { status: 'pending', error_message: '' })); }
+                }
+                const ap = await withEntityRetry(() => base44.entities.JobRow.filter({ job_id, status: 'pending' }, 'row_index', 5000, 0));
+                if (!ap.length) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
                 const rp = resumeJob.progress_json || {};
-                const rDone = Number(rp.done || 0), rErr = Number(rp.error || 0), rProc = Number(rp.processing || 0);
-                const rPending = typeof rp.pending === 'number' ? rp.pending : Math.max((resumeJob.total_rows || 0) - rDone - rErr - rProc, 0);
-                if (rPending <= 0) return Response.json({ job: resumeJob, message: 'No pending rows left to resume' });
-                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: rPending, processing: 0 } }));
-
-                // Kick off server-side background processing (await with timeout
-                // to ensure the request reaches the server before this function ends).
-                try {
-                    const sr = base44.asServiceRole;
-                    await Promise.race([
-                        sr.functions.invoke('processQueuedJobs', {}),
-                        sleep(5_000),
-                    ]);
-                } catch (_) { /* non-fatal */ }
-
+                const updatedResumeJob = await withEntityRetry(() => base44.entities.Job.update(job_id, { status: 'queued', error_message: '', progress_json: { ...rp, pending: ap.length, processing: 0 } }));
+                try { await Promise.race([base44.asServiceRole.functions.invoke('processQueuedJobs', {}), sleep(5_000)]); } catch(_){}
                 return Response.json({ job: updatedResumeJob });
             }
 
