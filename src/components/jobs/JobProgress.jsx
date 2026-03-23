@@ -145,8 +145,9 @@ export default function JobProgress({ jobId, onComplete }) {
                 a.remove();
                 toast.success('Download started');
             }
-        } catch {
-            toast.error('Failed to generate output file');
+        } catch (err) {
+            console.error('Download output error:', err);
+            toast.error(err?.response?.data?.error || err?.message || 'Failed to generate output file');
         } finally {
             setGenerating(false);
         }

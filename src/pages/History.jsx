@@ -93,7 +93,8 @@ export default function History() {
                 toast.success('Download started');
             }
         } catch (error) {
-            toast.error('Failed to download');
+            console.error('Download output error:', error);
+            toast.error(error?.response?.data?.error || error?.message || 'Failed to download');
         } finally {
             setGenerating(null);
         }

@@ -41,9 +41,15 @@ const EVIDENCE_HEADERS = [
     'Final_Repeal_Year', 'Final_Current_Status', 'Final_Public', 'Final_Flag',
 ];
 
+function safeJson(val) {
+    if (!val) return {};
+    if (typeof val === 'string') { try { return JSON.parse(val); } catch { return {}; } }
+    return val;
+}
+
 function rowToOutputAoaRow(row) {
-    const e = row.evidence_json || {};
-    const input = row.input_data || {};
+    const e = safeJson(row.evidence_json);
+    const input = safeJson(row.input_data);
     return [
         '',
         xlCell(e.Economy_Code),
@@ -62,8 +68,8 @@ function rowToOutputAoaRow(row) {
 }
 
 function rowToEvidenceAoaRow(row) {
-    const e = row.evidence_json || {};
-    const input = row.input_data || {};
+    const e = safeJson(row.evidence_json);
+    const input = safeJson(row.input_data);
     return [
         e.Row_Index || row.row_index,
         xlCell(e.Economy || input.Economy),
@@ -122,8 +128,7 @@ Deno.serve(async (req) => {
                 { job_id },
                 'row_index',
                 PAGE_SIZE,
-                skip,
-                ['row_index', 'input_data', 'evidence_json', 'status', 'error_message']
+                skip
             );
             if (!page.length) break;
 
@@ -143,8 +148,8 @@ Deno.serve(async (req) => {
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outputAoa), 'Output');
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(evidenceAoa), 'Evidence');
 
-        const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-        const base64Data = uint8ArrayToBase64(new Uint8Array(buffer));
+        const arrayBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        const base64Data = uint8ArrayToBase64(new Uint8Array(arrayBuf));
 
         // Generate Eastern Time timestamp
         const now = new Date();
