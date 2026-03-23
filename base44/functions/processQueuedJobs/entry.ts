@@ -49,8 +49,8 @@ Deno.serve(async (req) => {
             }
             const freshJob = freshJobs[0];
 
-            if (freshJob.status === 'done' || freshJob.status === 'error') {
-                console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
+            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'paused' || freshJob.status === 'aborted') {
+                console.log(`[processQueuedJobs] Job ${job_id} stopped with status=${freshJob.status}.`);
                 lastResult = { status: freshJob.status };
                 break;
             }
@@ -132,28 +132,42 @@ Deno.serve(async (req) => {
         // Self-chain: if there are still queued/running jobs, schedule another
         // invocation so processing continues without relying on the frontend or
         // waiting for the next automation scheduler tick.
+        //
+        // IMPORTANT: We must *await* the invoke (with a timeout) instead of
+        // fire-and-forget.  In serverless runtimes the execution context may be
+        // terminated as soon as the Response is returned, so an un-awaited
+        // outgoing HTTP request can be silently dropped — causing the chain to
+        // break and jobs to stall.
         const needsMoreWork =
             lastResult?.status !== 'done' &&
             lastResult?.status !== 'error' &&
+            lastResult?.status !== 'paused' &&
+            lastResult?.status !== 'aborted' &&
             batchesRun > 0;
 
-        if (needsMoreWork) {
+        let shouldChain = needsMoreWork;
+
+        if (!shouldChain) {
+            // Check if there are other queued/running jobs waiting
             try {
-                // Small delay before re-invoking to avoid tight loops
+                const [otherQueued, otherRunning] = await Promise.all([
+                    sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
+                    sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
+                ]);
+                shouldChain = otherQueued.length > 0 || otherRunning.length > 0;
+            } catch (_) {}
+        }
+
+        if (shouldChain) {
+            try {
                 await sleep(2_000);
-                sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                // Await with a 10-second timeout so the HTTP request is guaranteed
+                // to reach the server before this invocation ends.
+                await Promise.race([
+                    sr.functions.invoke('processQueuedJobs', {}),
+                    sleep(10_000),
+                ]);
                 console.log(`[processQueuedJobs] Self-chained — more work remains.`);
-            } catch (_) { /* non-fatal */ }
-        } else {
-            // Check if there are other queued jobs waiting
-            try {
-                const otherQueued = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1);
-                const otherRunning = await sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1);
-                if (otherQueued.length || otherRunning.length) {
-                    await sleep(2_000);
-                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                    console.log(`[processQueuedJobs] Self-chained — other jobs in queue.`);
-                }
             } catch (_) { /* non-fatal */ }
         }
 
