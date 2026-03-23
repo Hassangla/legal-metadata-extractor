@@ -76,9 +76,22 @@ export default function NewRun() {
                 task_name: taskName
             });
 
-            setCreatedJobId(response.data.job.id);
+            const jobId = response.data.job.id;
+            setCreatedJobId(jobId);
             setStep(4);
             toast.success('Job created successfully');
+
+            // Kick off the first processing batch immediately so the job
+            // doesn't sit in "queued" waiting for the automation scheduler.
+            try {
+                await base44.functions.invoke('jobProcessor', {
+                    action: 'process',
+                    job_id: jobId,
+                });
+            } catch (_) {
+                // Non-fatal: the automation scheduler will pick it up eventually.
+                // The job is already created and queued.
+            }
         } catch (error) {
             toast.error('Failed to create job');
         } finally {
