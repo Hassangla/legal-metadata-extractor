@@ -187,13 +187,15 @@ Deno.serve(async (req) => {
 
         if (shouldChain) {
             console.log(`[processQueuedJobs] Self-chaining — more work remains.`);
-            // Use a small delay then AWAIT the chain invocation to ensure it actually fires
-            // before this function's response is sent back.
             await sleep(1_000);
             try {
-                // Don't await the actual processing — just ensure the invoke request is sent
-                sr.functions.invoke('processQueuedJobs', {}).catch((e) => {
-                    console.error(`[processQueuedJobs] Chain invoke failed:`, e.message);
+                // Fire-and-forget HTTP call to self to continue processing
+                fetch(`${functionBaseUrl}/processQueuedJobs`, {
+                    method: 'POST',
+                    headers: reqHeaders,
+                    body: JSON.stringify({}),
+                }).catch((e) => {
+                    console.error(`[processQueuedJobs] Chain fetch failed:`, e.message);
                 });
                 // Give the HTTP request time to leave before we return
                 await sleep(500);
