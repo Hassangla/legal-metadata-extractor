@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
 const BATCH_SIZE=3,MAX_RETRIES=3,RETRY_BASE_MS=2000,ENTITY_RETRY_ATTEMPTS=5,ENTITY_RETRY_BASE_MS=500,ENTITY_CREATE_CHUNK_SIZE=50;
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -2092,7 +2092,7 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                     await withEntityRetry(() => base44.entities.JobRow.bulkCreate(chunk));
                     await sleep(200);
                 }
-                try { base44.asServiceRole.functions.invoke('processQueuedJobs', {}).catch(() => {}); } catch (_) {}
+
                 return Response.json({ job: newJob });
             }
 

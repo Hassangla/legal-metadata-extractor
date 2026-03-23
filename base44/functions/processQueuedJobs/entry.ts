@@ -1,98 +1,171 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+
+// Maximum wall-clock milliseconds to spend in one automation invocation.
+// Base44 automation functions have a ~25s CPU limit; we stop at 200s wall-clock
+// to leave plenty of headroom for the final DB writes.
+const MAX_WALL_MS = 200_000;
+const BATCH_INTER_DELAY_MS = 1_500; // small pause between batches
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 Deno.serve(async (req) => {
-    // ALWAYS return 200 to prevent automation auto-disable.
-    const base44 = createClientFromRequest(req);
-    const sr = base44.asServiceRole;
-
     try {
-        console.log('[PQJ] Starting...');
+        const base44 = createClientFromRequest(req);
 
-        // Find the oldest queued or running job
+        // This function is called by the automation scheduler (no user session).
+        // Use service role for all DB access.
+        const sr = base44.asServiceRole;
+
+        const startTime = Date.now();
+
+        // Find the oldest queued or running job.
+        // We process one job per invocation to keep things simple and predictable.
         const [queuedJobs, runningJobs] = await Promise.all([
             sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
             sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
         ]);
 
-        const job = (queuedJobs || [])[0] || (runningJobs || [])[0];
+        // Prefer queued over running; among running, take the least-recently-updated one.
+        const job = queuedJobs[0] || runningJobs[0];
+
         if (!job) {
-            console.log('[PQJ] No active jobs found.');
-            return Response.json({ ok: true, message: 'No active jobs.' });
+            return Response.json({ message: 'No queued or running jobs found.' });
         }
 
         const job_id = job.id;
-        console.log(`[PQJ] Found job ${job_id} status=${job.status}`);
+        console.log(`[processQueuedJobs] Picked up job ${job_id} (status=${job.status})`);
 
-        // Reset any stale 'processing' rows back to 'pending'
-        try {
-            const staleRows = await sr.entities.JobRow.filter(
-                { job_id, status: 'processing' }, 'row_index', 50
-            );
-            if (staleRows.length > 0) {
-                console.log(`[PQJ] Resetting ${staleRows.length} stale processing rows`);
-                for (const row of staleRows) {
-                    try { await sr.entities.JobRow.update(row.id, { status: 'pending' }); } catch (_) {}
-                }
+        // Delegate all processing to the existing jobProcessor `process` action.
+        // We call it repeatedly until the job is done or we're close to the time limit.
+        let batchesRun = 0;
+        let lastResult = null;
+
+        while (Date.now() - startTime < MAX_WALL_MS) {
+            // Re-fetch the job to get the latest status before each batch.
+            const freshJobs = await sr.entities.Job.filter({ id: job_id });
+            if (!freshJobs.length) {
+                console.log(`[processQueuedJobs] Job ${job_id} disappeared — stopping.`);
+                break;
             }
-        } catch (_) {}
+            const freshJob = freshJobs[0];
 
-        // Check if there are pending rows
-        const pendingCheck = await sr.entities.JobRow.filter(
-            { job_id, status: 'pending' }, 'row_index', 1
-        );
+            if (freshJob.status === 'done' || freshJob.status === 'error') {
+                console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
+                lastResult = { status: freshJob.status };
+                break;
+            }
 
-        if (!pendingCheck.length) {
-            console.log(`[PQJ] No pending rows — marking job done.`);
-            try {
+            // Recover stale 'processing' rows that may have been left by a crashed batch.
+            // If a row has been in 'processing' for too long, reset it to 'pending'.
+            const processingRows = await sr.entities.JobRow.filter(
+                { job_id, status: 'processing' },
+                'row_index',
+                50,
+                0
+            );
+            for (const staleRow of processingRows) {
+                try {
+                    await sr.entities.JobRow.update(staleRow.id, { status: 'pending' });
+                } catch (_) {}
+            }
+
+            // Check if there are any pending rows left.
+            const pendingRows = await sr.entities.JobRow.filter(
+                { job_id, status: 'pending' },
+                'row_index',
+                1,
+                0
+            );
+            if (!pendingRows.length) {
+                // No pending rows — mark done.
                 await sr.entities.Job.update(job_id, {
                     status: 'done',
-                    processed_rows: job.total_rows || job.processed_rows,
+                    processed_rows: freshJob.total_rows || freshJob.processed_rows,
                 });
-            } catch (_) {}
-            return Response.json({ ok: true, job_id, message: 'No pending rows, marked done.' });
-        }
+                console.log(`[processQueuedJobs] Job ${job_id} — no pending rows, marked done.`);
+                lastResult = { status: 'done' };
+                break;
+            }
 
-        // Call jobProcessor directly via HTTP (avoids sr.functions.invoke 403 issue)
-        // Build the request to jobProcessor by forwarding auth headers
-        console.log(`[PQJ] Calling jobProcessor for job ${job_id}...`);
-        
-        const appId = Deno.env.get('BASE44_APP_ID');
-        const jobProcessorUrl = `https://base44.app/api/apps/${appId}/functions/jobProcessor`;
-        
-        // Forward all auth-related headers from the incoming request
-        const headers = {};
-        for (const [key, value] of req.headers.entries()) {
-            const lk = key.toLowerCase();
-            if (lk === 'authorization' || lk === 'x-base44-token' || lk === 'x-base44-service-role-key' || lk.startsWith('x-base44')) {
-                headers[key] = value;
+            // Invoke the existing `process` action via the SDK so all the complex
+            // extraction / verification / pricing logic stays in one place.
+            let batchResp;
+            try {
+                batchResp = await sr.functions.invoke('jobProcessor', {
+                    action: 'process',
+                    job_id,
+                });
+            } catch (invokeErr) {
+                console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, invokeErr.message);
+                // If the jobProcessor itself set the job to error, we respect that and stop.
+                const afterErr = await sr.entities.Job.filter({ id: job_id });
+                if (afterErr[0]?.status === 'error') {
+                    lastResult = { status: 'error', error: invokeErr.message };
+                    break;
+                }
+                // Transient error — wait a bit and try again next automation tick
+                break;
+            }
+
+            batchesRun++;
+            const remaining = batchResp?.remaining ?? batchResp?.data?.remaining;
+            lastResult = batchResp?.data || batchResp;
+
+            console.log(`[processQueuedJobs] Batch ${batchesRun} done. remaining=${remaining}`);
+
+            if (remaining === 0 || remaining === undefined) {
+                // jobProcessor already set status to 'done' — we're finished.
+                break;
+            }
+
+            // Small inter-batch pause to avoid hammering the provider.
+            if (Date.now() - startTime + BATCH_INTER_DELAY_MS < MAX_WALL_MS) {
+                await sleep(BATCH_INTER_DELAY_MS);
+            } else {
+                break; // approaching time limit
             }
         }
-        headers['Content-Type'] = 'application/json';
 
-        const resp = await fetch(jobProcessorUrl, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ action: 'process', job_id }),
-        });
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
-        if (!resp.ok) {
-            const errText = await resp.text();
-            console.error(`[PQJ] jobProcessor returned ${resp.status}: ${errText.slice(0, 300)}`);
-            return Response.json({ ok: true, error: `jobProcessor ${resp.status}`, job_id });
+        // Self-chain: if there are still queued/running jobs, schedule another
+        // invocation so processing continues without relying on the frontend or
+        // waiting for the next automation scheduler tick.
+        const needsMoreWork =
+            lastResult?.status !== 'done' &&
+            lastResult?.status !== 'error' &&
+            batchesRun > 0;
+
+        if (needsMoreWork) {
+            try {
+                // Small delay before re-invoking to avoid tight loops
+                await sleep(2_000);
+                sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                console.log(`[processQueuedJobs] Self-chained — more work remains.`);
+            } catch (_) { /* non-fatal */ }
+        } else {
+            // Check if there are other queued jobs waiting
+            try {
+                const otherQueued = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1);
+                const otherRunning = await sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1);
+                if (otherQueued.length || otherRunning.length) {
+                    await sleep(2_000);
+                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
+                    console.log(`[processQueuedJobs] Self-chained — other jobs in queue.`);
+                }
+            } catch (_) { /* non-fatal */ }
         }
 
-        const batchResp = await resp.json();
-        console.log(`[PQJ] Batch complete. remaining=${batchResp?.remaining} processed=${batchResp?.processed_this_batch}`);
-
         return Response.json({
-            ok: true,
             job_id,
-            remaining: batchResp?.remaining,
-            processed: batchResp?.processed_this_batch,
+            batches_run: batchesRun,
+            elapsed_seconds: elapsed,
+            last_result: lastResult,
         });
 
     } catch (error) {
-        console.error('[PQJ] Error:', error.message);
-        return Response.json({ ok: true, error: error.message });
+        console.error('[processQueuedJobs] Fatal error:', error.message);
+        return Response.json({ error: error.message }, { status: 500 });
     }
 });

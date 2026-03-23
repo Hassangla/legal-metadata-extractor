@@ -80,8 +80,6 @@ export default function NewRun() {
             setCreatedJobId(jobId);
             setStep(4);
             toast.success('Job created — processing will run on the server in the background');
-            // Kick off server-side processing from the frontend (user-auth context is more reliable)
-            base44.functions.invoke('processQueuedJobs', {}).catch(() => {});
         } catch (error) {
             toast.error('Failed to create job');
         } finally {
