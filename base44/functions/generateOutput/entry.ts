@@ -132,12 +132,17 @@ Deno.serve(async (req) => {
         let totalFetched = 0;
         let nonEmptyOutputRows = 0;
         while (true) {
+            console.log(`[generateOutput] Fetching page: job_id=${job_id}, skip=${skip}, PAGE_SIZE=${PAGE_SIZE}`);
             let page = await base44.entities.JobRow.filter(
-                { job_id, status: 'done' },
+                { job_id },
                 'row_index',
                 PAGE_SIZE,
                 skip
             );
+            console.log(`[generateOutput] Raw page type: ${typeof page}, isArray: ${Array.isArray(page)}, length: ${Array.isArray(page) ? page.length : 'N/A'}`);
+            if (page && typeof page === 'object' && !Array.isArray(page)) {
+                console.log(`[generateOutput] Page is object, keys: ${Object.keys(page).slice(0, 10).join(', ')}`);
+            }
             if (typeof page === 'string') { try { page = JSON.parse(page); } catch { page = []; } }
             if (!Array.isArray(page) || !page.length) break;
             totalFetched += page.length;
