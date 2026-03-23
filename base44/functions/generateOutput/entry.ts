@@ -188,12 +188,15 @@ Deno.serve(async (req) => {
         const timestamp = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}-${parts.minute}-${parts.second}`;
         const filename = `legal_metadata_output_${timestamp}.xlsx`;
 
+        const base64Len = base64Data.length;
+        console.log(`[generateOutput] Excel base64 size: ${base64Len} chars, ${Math.round(base64Len / 1024)}KB`);
+
         return Response.json({
             success: true,
             filename,
             data: base64Data,
             mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            _debug: { totalDataRows: outputAoa.length - 1, firstRow: debugFirstRow },
+            _debug: { totalDataRows: outputAoa.length - 1, firstRow: debugFirstRow, base64Size: base64Len },
         });
     } catch (error) {
         return Response.json({ error: error.message }, { status: 500 });
