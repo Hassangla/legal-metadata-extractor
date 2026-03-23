@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
             }
             const freshJob = freshJobs[0];
 
-            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'paused' || freshJob.status === 'aborted') {
+            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'paused' || freshJob.status === 'stopped' || freshJob.status === 'aborted') {
                 console.log(`[processQueuedJobs] Job ${job_id} stopped with status=${freshJob.status}.`);
                 lastResult = { status: freshJob.status };
                 break;
@@ -142,6 +142,7 @@ Deno.serve(async (req) => {
             lastResult?.status !== 'done' &&
             lastResult?.status !== 'error' &&
             lastResult?.status !== 'paused' &&
+            lastResult?.status !== 'stopped' &&
             lastResult?.status !== 'aborted' &&
             batchesRun > 0;
 
