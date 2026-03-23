@@ -82,15 +82,18 @@ export default function NewRun() {
             toast.success('Job created successfully');
 
             // Kick off the first processing batch immediately so the job
-            // doesn't sit in "queued" waiting for the automation scheduler.
-            try {
-                await base44.functions.invoke('jobProcessor', {
-                    action: 'process',
-                    job_id: jobId,
-                });
-            } catch (_) {
-                // Non-fatal: the automation scheduler will pick it up eventually.
-                // The job is already created and queued.
+            // starts running right away. Retry once on failure.
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    await base44.functions.invoke('jobProcessor', {
+                        action: 'process',
+                        job_id: jobId,
+                    });
+                    break;
+                } catch (_) {
+                    if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+                    // JobProgress will continue driving processing if this fails.
+                }
             }
         } catch (error) {
             toast.error('Failed to create job');

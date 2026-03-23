@@ -37,17 +37,39 @@ export default function JobProgress({ jobId, onComplete }) {
     const [pausing, setPausing] = useState(false);
     const [stopping, setStopping] = useState(false);
     const pollRef = useRef(null);
+    const processRef = useRef(null);
     const jobIdRef = useRef(jobId);
+    const processingLock = useRef(false);
 
     useEffect(() => { jobIdRef.current = jobId; }, [jobId]);
 
+    // Actively trigger processing so the job doesn't sit in "queued"
+    const triggerProcessing = useCallback(async () => {
+        if (processingLock.current) return;
+        processingLock.current = true;
+        try {
+            await base44.functions.invoke('jobProcessor', {
+                action: 'process',
+                job_id: jobIdRef.current,
+            });
+        } catch (_) {
+            // Non-fatal — next tick will retry
+        } finally {
+            processingLock.current = false;
+        }
+    }, []);
+
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
+        if (processRef.current) clearInterval(processRef.current);
         setJob(null);
         setStatusCounts(null);
         setLoading(true);
         if (jobId) loadJobStatus();
-        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (processRef.current) clearInterval(processRef.current);
+        };
     }, [jobId]);
 
     const loadJobStatus = useCallback(async () => {
@@ -70,12 +92,23 @@ export default function JobProgress({ jobId, onComplete }) {
         }
     }, [onComplete]);
 
+    // Poll status every 5s and drive processing every 8s while the job is active
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
+        if (processRef.current) clearInterval(processRef.current);
         const isActive = job?.status === 'queued' || job?.status === 'running';
-        if (isActive) pollRef.current = setInterval(loadJobStatus, 5000);
-        return () => { if (pollRef.current) clearInterval(pollRef.current); };
-    }, [job?.status, loadJobStatus]);
+        if (isActive) {
+            pollRef.current = setInterval(loadJobStatus, 5000);
+            // Drive processing: kick a new batch periodically so the job
+            // keeps moving even without the automation scheduler.
+            triggerProcessing(); // immediate kick
+            processRef.current = setInterval(triggerProcessing, 8000);
+        }
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (processRef.current) clearInterval(processRef.current);
+        };
+    }, [job?.status, loadJobStatus, triggerProcessing]);
 
     const handleResume = async () => {
         setResuming(true);
