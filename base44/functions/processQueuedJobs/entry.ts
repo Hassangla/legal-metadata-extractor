@@ -37,12 +37,17 @@ Deno.serve(async (req) => {
         let batchesRun = 0;
         let lastResult = null;
 
+        console.log(`[processQueuedJobs] Entering processing loop. timeLeft=${MAX_WALL_MS - (Date.now() - startTime)}ms`);
+
         while (Date.now() - startTime < MAX_WALL_MS) {
+            console.log(`[processQueuedJobs] Loop iteration ${batchesRun}. elapsed=${Date.now() - startTime}ms`);
+            
             // Re-fetch job status before each batch
             let freshJob;
             try {
                 const freshJobs = await sr.entities.Job.filter({ id: job_id });
                 freshJob = freshJobs[0];
+                console.log(`[processQueuedJobs] Fresh job status=${freshJob?.status}`);
             } catch (e) {
                 console.error('[processQueuedJobs] Failed to re-fetch job:', e.message);
                 break;
@@ -63,19 +68,23 @@ Deno.serve(async (req) => {
                 const processingRows = await sr.entities.JobRow.filter(
                     { job_id, status: 'processing' }, 'row_index', 50, 0
                 );
+                console.log(`[processQueuedJobs] Found ${processingRows.length} processing rows`);
                 if (processingRows.length > 0) {
                     console.log(`[processQueuedJobs] Resetting ${processingRows.length} stale processing rows`);
                     for (const staleRow of processingRows) {
                         try { await sr.entities.JobRow.update(staleRow.id, { status: 'pending' }); } catch (_) {}
                     }
                 }
-            } catch (_) {}
+            } catch (e) {
+                console.error('[processQueuedJobs] Failed to check processing rows:', e.message);
+            }
 
             // Check for pending rows
             try {
                 const pendingRows = await sr.entities.JobRow.filter(
                     { job_id, status: 'pending' }, 'row_index', 1, 0
                 );
+                console.log(`[processQueuedJobs] Found ${pendingRows.length} pending rows`);
                 if (!pendingRows.length) {
                     try {
                         await sr.entities.Job.update(job_id, {
