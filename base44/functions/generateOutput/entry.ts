@@ -195,22 +195,17 @@ Deno.serve(async (req) => {
 
         const base64Len = base64Data.length;
 
-        // TEMP DEBUG MODE: return debug info only
-        if (outputAoa.length <= 1) {
-            // No data rows - return debug info to diagnose
-            return Response.json({
-                success: false,
-                error: 'No data rows found',
-                _debug: { totalDataRows: outputAoa.length - 1, totalFetched, nonEmptyOutputRows, firstRow: debugFirstRow, base64Size: base64Len, job_id },
-            });
-        }
-
+        // TEMP DEBUG: return only debug info
         return Response.json({
-            success: true,
-            filename,
-            data: base64Data,
-            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            _debug: { totalDataRows: outputAoa.length - 1, totalFetched, nonEmptyOutputRows, firstRow: debugFirstRow, base64Size: base64Len },
+            _debug: {
+                totalDataRows: outputAoa.length - 1,
+                totalFetched,
+                nonEmptyOutputRows,
+                firstRow: debugFirstRow,
+                base64Size: base64Len,
+                sampleOutputRow: outputAoa.length > 1 ? outputAoa[1] : null,
+                sampleEvidenceRow: evidenceAoa.length > 1 ? evidenceAoa[1]?.slice(0, 5) : null,
+            },
         });
     } catch (error) {
         return Response.json({ error: error.message }, { status: 500 });
