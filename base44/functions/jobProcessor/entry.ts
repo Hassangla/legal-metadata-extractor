@@ -1526,15 +1526,13 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             if (data.usage) {
                                 inputTokens = data.usage.prompt_tokens || data.usage.input_tokens || 0;
                                 outputTokens = data.usage.completion_tokens || data.usage.output_tokens || 0;
+                                const rTok = data.usage.completion_tokens_details?.reasoning_tokens || data.usage.output_tokens_details?.reasoning_tokens || 0;
+                                if (rTok > outputTokens) outputTokens = rTok;
                             } else if (data.usageMetadata) {
                                 inputTokens = data.usageMetadata.promptTokenCount || 0;
-                                outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+                                outputTokens = (data.usageMetadata.candidatesTokenCount || 0) + (data.usageMetadata.thoughtsTokenCount || 0);
                             }
-                            // Responses API may report tokens differently
-                            if (isResponsesApi && inputTokens === 0 && data.usage) {
-                                inputTokens = data.usage.input_tokens || 0;
-                                outputTokens = data.usage.output_tokens || 0;
-                            }
+                            if (isResponsesApi && inputTokens === 0 && data.usage) { inputTokens = data.usage.input_tokens || 0; outputTokens = data.usage.output_tokens || 0; }
                           } catch (fetchErr) {
                             // Provider failure → produce diagnostic row instead of hard error
                             data = { error: { message: fetchErr.message || String(fetchErr) } };
