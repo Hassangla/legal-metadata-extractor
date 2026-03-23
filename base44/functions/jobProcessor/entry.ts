@@ -1793,6 +1793,128 @@ The object has ONE top-level key "evidence" containing all evidence fields AND a
                             modelId: job.model_id,
                         });
 
+                        // ── WBL.WORLDBANK.ORG ALTERNATIVE SOURCE SEARCH ──
+                        // When the final URL is still wbl.worldbank.org after all validation,
+                        // perform a secondary web search to actively find an alternative primary source.
+                        if (searchActuallyWorked && effectiveWebSearch !== 'none' && ev.Final_Instrument_URL && isWblWorldBankUrl(ev.Final_Instrument_URL)) {
+                            try {
+                                const instrumentName = (ev.Final_Instrument_Full_Name_Original_Language || ev.Final_Instrument_Published_Name || legalBasis || '').trim();
+                                const altSearchPrompt = `Find the official primary source URL for this legal instrument from ${input.Economy}:
+"${instrumentName}"
+
+IMPORTANT: Do NOT return any URL from wbl.worldbank.org — that is a secondary database.
+Look for the official government gazette, official legal database, or a reputable legal database (WIPO Lex, ILO NATLEX, FAO FAOLEX, etc.).
+
+Return ONLY a JSON object with these fields:
+{
+  "alternative_url": "the URL you found (empty string if none found)",
+  "source_description": "brief description of the source"
+}
+Return ONLY valid JSON — no markdown, no explanation.`;
+
+                                const altReq = buildLLMRequest(
+                                    providerType, job.model_id,
+                                    'You are a legal research assistant. Find official primary source URLs for legal instruments. Never suggest wbl.worldbank.org URLs.',
+                                    altSearchPrompt,
+                                    effectiveWebSearch, conn.base_url, apiKey
+                                );
+
+                                let altData;
+                                let altToolUrls = [];
+                                const isAltKimi = effectiveWebSearch === 'kimi_web_search';
+
+                                if (isAltKimi) {
+                                    const kimiResult = await runKimiSearchLoop(altReq.url, altReq.init, 0, 0, [], false, providerType);
+                                    altData = kimiResult.data;
+                                    altToolUrls = kimiResult.kimiObservedToolUrls || [];
+                                    batchInputTokens += kimiResult.inputTokens || 0;
+                                    batchOutputTokens += kimiResult.outputTokens || 0;
+                                } else {
+                                    const altResp = await fetchWithRetry(altReq.url, altReq.init);
+                                    altData = await altResp.json();
+                                    if (altData.usage) {
+                                        batchInputTokens += altData.usage.prompt_tokens || altData.usage.input_tokens || 0;
+                                        batchOutputTokens += altData.usage.completion_tokens || altData.usage.output_tokens || 0;
+                                    } else if (altData.usageMetadata) {
+                                        batchInputTokens += altData.usageMetadata.promptTokenCount || 0;
+                                        batchOutputTokens += altData.usageMetadata.candidatesTokenCount || 0;
+                                    }
+                                }
+
+                                // Extract tool URLs from the alternative search response
+                                if (altReq.isResponsesApi && Array.isArray(altData?.output)) {
+                                    for (const item of altData.output) {
+                                        if (item.type === 'web_search_call' && item.id) {
+                                            const resultItem = altData.output.find(o => o.type === 'web_search_result' || (o.type === 'message' && o.id));
+                                            if (resultItem) {
+                                                for (const u of extractUrlsFromText(JSON.stringify(resultItem))) {
+                                                    if (!altToolUrls.includes(u)) altToolUrls.push(u);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                const altContent = extractTextContent(providerType, altData, altReq.isResponsesApi || false);
+                                const altParsed = extractJSON(altContent);
+
+                                // Collect candidate URLs from both the parsed response and tool URLs
+                                const altCandidates = [];
+                                if (altParsed?.alternative_url && typeof altParsed.alternative_url === 'string' && altParsed.alternative_url.trim()) {
+                                    altCandidates.push(altParsed.alternative_url.trim());
+                                }
+                                // Also consider tool-returned URLs from the alternative search
+                                for (const u of altToolUrls) {
+                                    if (!isWblWorldBankUrl(u) && isSafeHttpUrl(u) && !altCandidates.includes(u)) {
+                                        altCandidates.push(u);
+                                    }
+                                }
+                                // Also extract any URLs from the raw text content
+                                for (const u of extractUrlsFromText(altContent)) {
+                                    if (!isWblWorldBankUrl(u) && isSafeHttpUrl(u) && !altCandidates.includes(u)) {
+                                        altCandidates.push(u);
+                                    }
+                                }
+
+                                // Try each candidate until we find one that loads
+                                const wblOriginal = ev.Final_Instrument_URL;
+                                let altReplaced = false;
+                                for (const altUrl of altCandidates) {
+                                    if (isWblWorldBankUrl(altUrl)) continue;
+                                    if (!isSafeHttpUrl(altUrl)) continue;
+                                    const altLoads = await verifyUrlLoads(altUrl);
+                                    if (altLoads) {
+                                        ev.Final_Instrument_URL = altUrl;
+                                        ev.Final_Public = 'Yes';
+                                        const prevNotes = ev.Normalization_Notes || '';
+                                        ev.Normalization_Notes = [prevNotes, `WBL alt-source search: ${wblOriginal} → ${altUrl} (secondary web search found primary source)`].filter(Boolean).join('; ');
+                                        ev.Missing_Conflict_Reason = [ev.Missing_Conflict_Reason, `wbl.worldbank.org detected; secondary search found alternative: "${altUrl}".`].filter(Boolean).join('; ');
+                                        ev['Missing/Conflict_Reason'] = ev.Missing_Conflict_Reason;
+                                        // Add the new URL to evidence URL lists
+                                        const consideredList = parseUrlList(ev.URLs_Considered);
+                                        if (!consideredList.some(u => u.replace(/\/+$/, '').toLowerCase() === altUrl.replace(/\/+$/, '').toLowerCase())) {
+                                            ev.URLs_Considered = [altUrl, ev.URLs_Considered].filter(Boolean).join('; ');
+                                        }
+                                        const selectedList = parseUrlList(ev.Selected_Source_URLs);
+                                        if (!selectedList.some(u => u.replace(/\/+$/, '').toLowerCase() === altUrl.replace(/\/+$/, '').toLowerCase())) {
+                                            ev.Selected_Source_URLs = [altUrl, ev.Selected_Source_URLs].filter(Boolean).join('; ');
+                                        }
+                                        altReplaced = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!altReplaced) {
+                                    ev.Missing_Conflict_Reason = [ev.Missing_Conflict_Reason, `wbl.worldbank.org detected; secondary alt-source search found no loadable alternative — WBL URL kept.`].filter(Boolean).join('; ');
+                                    ev['Missing/Conflict_Reason'] = ev.Missing_Conflict_Reason;
+                                }
+                            } catch (altErr) {
+                                // Non-fatal: if alternative search fails, keep the WBL URL
+                                ev.Missing_Conflict_Reason = [ev.Missing_Conflict_Reason, `wbl.worldbank.org alt-source search failed: ${(altErr?.message || 'unknown').slice(0, 100)}`].filter(Boolean).join('; ');
+                                ev['Missing/Conflict_Reason'] = ev.Missing_Conflict_Reason;
+                            }
+                        }
+
                         // ── PORTUGUESE TRANSLATION FALLBACK ──
                         if((ev.Final_Language_Doc||'').toLowerCase()==='portuguese'){const ptO=(ev.Final_Instrument_Full_Name_Original_Language||'').trim(),ptP=(ev.Final_Instrument_Published_Name||'').trim();if(ptO&&(!ptP||ptP===ptO||hasPortugueseMarkers(ptP)||/\bde \d{1,2} de [A-Za-záéíóúãõç]+ de \d{4}\b/i.test(ptP))){try{const tR=buildLLMRequest(providerType,job.model_id,'You translate legal instrument titles to English accurately.',`Translate this title to English. Output ONLY the translated title, no quotes, no commentary:\n${ptO}`,'none',conn.base_url,apiKey);const tResp=await fetchWithRetry(tR.url,tR.init);const tData=await tResp.json();const tText=extractTextContent(providerType,tData,tR.isResponsesApi||false).trim().replace(/^["'\s]+|["'\s]+$/g,'');if(tText&&tText.length>0&&tText!==ptO){ev.Final_Instrument_Published_Name=tText;ev.Missing_Conflict_Reason=[ev.Missing_Conflict_Reason,'Portuguese translation fallback: Published Name translated to English.'].filter(Boolean).join('; ');ev['Missing/Conflict_Reason']=ev.Missing_Conflict_Reason;}}catch(_){}}}
 
