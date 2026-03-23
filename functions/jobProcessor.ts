@@ -1143,10 +1143,22 @@ function estimateCostFromTable(modelId, inTok, outTok) {
 Deno.serve(async (req) => {
     try {
         const base44 = createClientFromRequest(req);
-        const user = await base44.auth.me();
-        if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        let user;
+        try {
+            user = await base44.auth.me();
+        } catch (_) {
+            // Service-role calls (from processQueuedJobs automation) have no user session.
+            // Allow them through for the 'process' action only.
+            user = null;
+        }
 
         const { action, ...params } = await req.json();
+
+        // Actions that require an authenticated user session
+        const userRequiredActions = new Set(['create', 'getStatus', 'list', 'rerun', 'getRows', 'pause', 'stop', 'resume', 'rename', 'deleteJob']);
+        if (!user && userRequiredActions.has(action)) {
+            return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         switch (action) {
 

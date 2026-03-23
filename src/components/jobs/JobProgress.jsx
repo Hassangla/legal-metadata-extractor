@@ -2,19 +2,31 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { 
-    Play, Pause, Download, RefreshCw, Loader2, CheckCircle2, 
-    XCircle, AlertCircle, Clock, Server, FileText, Cpu, DollarSign, Square
+import {
+    Play, Pause, Download, RefreshCw, Loader2, CheckCircle2,
+    XCircle, AlertCircle, Clock, Server, FileText, Cpu, DollarSign, Square, Search
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const STATUS_CONFIG = {
-    queued:  { label: 'Queued',     color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200',  dot: 'bg-amber-400' },
+    queued:  { label: 'Queued — Waiting to Start', color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200',  dot: 'bg-amber-400 animate-pulse' },
     running: { label: 'Processing', color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',    dot: 'bg-blue-500 animate-pulse' },
     done:    { label: 'Completed',  color: 'text-green-700',  bg: 'bg-green-50 border-green-200',  dot: 'bg-green-500' },
     error:   { label: 'Error',      color: 'text-red-600',    bg: 'bg-red-50 border-red-200',      dot: 'bg-red-500' },
     paused:  { label: 'Paused',     color: 'text-slate-600',  bg: 'bg-slate-50 border-slate-200',  dot: 'bg-slate-400' },
 };
+
+function formatDuration(ms) {
+    if (ms < 0 || !Number.isFinite(ms)) return '';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    if (m < 60) return `${m}m ${rs}s`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return `${h}h ${rm}m`;
+}
 
 export default function JobProgress({ jobId, onComplete }) {
     const [job, setJob] = useState(null);
@@ -150,6 +162,18 @@ export default function JobProgress({ jobId, onComplete }) {
     const canResume = (job.status === 'error' || job.status === 'paused') && statusCounts?.pending > 0;
     const canDownload = job.status === 'done' || actualProcessed > 0;
 
+    // Elapsed time since job creation
+    const elapsedMs = job.created_date ? Date.now() - new Date(job.created_date).getTime() : 0;
+    const elapsedStr = elapsedMs > 0 ? formatDuration(elapsedMs) : '';
+
+    // ETA based on processing rate
+    let etaStr = '';
+    if (job.status === 'running' && actualProcessed > 0 && statusCounts?.pending > 0) {
+        const msPerRow = elapsedMs / actualProcessed;
+        const remainingMs = msPerRow * statusCounts.pending;
+        etaStr = formatDuration(remainingMs);
+    }
+
     return (
         <div className="space-y-4">
             {/* Status header */}
@@ -157,20 +181,39 @@ export default function JobProgress({ jobId, onComplete }) {
                 <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
                     <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
+                    {elapsedStr && (
+                        <span className="text-xs text-slate-400 ml-1">({elapsedStr})</span>
+                    )}
                 </div>
                 <button onClick={loadJobStatus} className="text-slate-400 hover:text-slate-600 transition-colors">
                     <RefreshCw className="w-3.5 h-3.5" />
                 </button>
             </div>
 
+            {/* Queued — extra info about what's happening */}
+            {job.status === 'queued' && (
+                <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-lg border border-amber-100">
+                    <Clock className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                    <div className="text-xs text-amber-800 leading-relaxed">
+                        <p className="font-medium mb-1">Task is queued and will start shortly</p>
+                        <p>The server processes tasks automatically in the background. You can safely close this tab — your task will continue running.</p>
+                    </div>
+                </div>
+            )}
+
             {/* Progress bar */}
             <div className="space-y-1.5">
                 <div className="flex justify-between items-baseline">
                     <span className="text-sm text-slate-500">Rows processed</span>
-                    <span className="text-sm font-semibold text-slate-800">
-                        {actualProcessed} <span className="font-normal text-slate-400">/ {job.total_rows}</span>
-                        <span className="ml-2 text-xs text-slate-400">{progress}%</span>
-                    </span>
+                    <div className="flex items-baseline gap-2">
+                        <span className="text-sm font-semibold text-slate-800">
+                            {actualProcessed} <span className="font-normal text-slate-400">/ {job.total_rows}</span>
+                            <span className="ml-2 text-xs text-slate-400">{progress}%</span>
+                        </span>
+                        {etaStr && (
+                            <span className="text-xs text-blue-500 font-medium">~{etaStr} left</span>
+                        )}
+                    </div>
                 </div>
                 <Progress value={progress} className="h-1.5" />
             </div>
@@ -207,6 +250,12 @@ export default function JobProgress({ jobId, onComplete }) {
                     <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                     <span className="truncate">{job.input_file_name}</span>
                 </div>
+                {job.web_search_choice && job.web_search_choice !== 'none' && (
+                    <div className="flex items-center gap-2 text-slate-600">
+                        <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>Web search: {job.web_search_choice.replace(/_/g, ' ')}</span>
+                    </div>
+                )}
                 {(job.total_input_tokens > 0 || job.estimated_cost_usd > 0) && (
                     <div className="flex items-center gap-2 text-slate-600">
                         <Cpu className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -231,7 +280,7 @@ export default function JobProgress({ jobId, onComplete }) {
             )}
 
             {/* Server notice */}
-            {isActive && (
+            {job.status === 'running' && (
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                     <span>Processing on server — safe to close this tab</span>
@@ -267,7 +316,7 @@ export default function JobProgress({ jobId, onComplete }) {
                         className="gap-1.5 flex-1"
                     >
                         {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                        {generating ? 'Generating…' : 'Download Output'}
+                        {generating ? 'Generating...' : 'Download Output'}
                     </Button>
                 )}
             </div>
