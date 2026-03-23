@@ -100,13 +100,13 @@ Deno.serve(async (req) => {
                     job_id,
                 });
                 const batchResp = invokeResult?.data || invokeResult;
-                console.log(`[processQueuedJobs] Batch ${batchesRun + 1} done. remaining=${batchResp?.remaining}`);
+                console.log(`[processQueuedJobs] Batch ${batchesRun + 1} done. remaining=${batchResp?.remaining} resp_keys=${Object.keys(batchResp || {}).join(',')}`);
                 batchesRun++;
                 lastResult = batchResp;
                 const remaining = batchResp?.remaining;
                 if (remaining === 0 || remaining === undefined) break;
             } catch (invokeErr) {
-                console.error(`[processQueuedJobs] invoke error batch ${batchesRun + 1}:`, String(invokeErr?.message || invokeErr));
+                console.error(`[processQueuedJobs] invoke error batch ${batchesRun + 1}:`, invokeErr?.message || String(invokeErr), 'status:', invokeErr?.response?.status, 'data:', JSON.stringify(invokeErr?.response?.data || {}).slice(0, 300));
                 // Check if job went to terminal state
                 try {
                     const afterErr = await sr.entities.Job.filter({ id: job_id });
