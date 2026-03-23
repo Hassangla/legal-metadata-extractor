@@ -1,7 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
-// Keep well under Deno Deploy's execution limit to avoid timeout = failure = auto-disable.
-const MAX_WALL_MS = 55_000;  // 55 seconds max
+// jobProcessor can take 60-120s per batch (web search rows are slow).
+// Give enough room for 1 batch + overhead, but stay under Deno's 300s hard limit.
+const MAX_WALL_MS = 150_000;  // 150 seconds max
 const BATCH_INTER_DELAY_MS = 1_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
