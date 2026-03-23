@@ -13,6 +13,7 @@ const STATUS_CONFIG = {
     running: { label: 'Processing', color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',    dot: 'bg-blue-500 animate-pulse' },
     done:    { label: 'Completed',  color: 'text-green-700',  bg: 'bg-green-50 border-green-200',  dot: 'bg-green-500' },
     error:   { label: 'Error',      color: 'text-red-600',    bg: 'bg-red-50 border-red-200',      dot: 'bg-red-500' },
+    stopped: { label: 'Stopped',    color: 'text-orange-600', bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-500' },
     paused:  { label: 'Paused',     color: 'text-slate-600',  bg: 'bg-slate-50 border-slate-200',  dot: 'bg-slate-400' },
 };
 
@@ -174,7 +175,7 @@ export default function JobProgress({ jobId, onComplete }) {
     const isActive = job.status === 'queued' || job.status === 'running';
     const actualProcessed = statusCounts ? (statusCounts.done + statusCounts.error) : job.processed_rows;
     const progress = job.total_rows > 0 ? Math.round((actualProcessed / job.total_rows) * 100) : 0;
-    const canResume = (job.status === 'error' || job.status === 'paused') && statusCounts?.pending > 0;
+    const canResume = (job.status === 'error' || job.status === 'paused' || job.status === 'stopped') && statusCounts?.pending > 0;
     const canDownload = job.status === 'done' || actualProcessed > 0;
 
     // Elapsed time since job creation
@@ -291,6 +292,13 @@ export default function JobProgress({ jobId, onComplete }) {
                 <div className="flex items-start gap-2 p-3 bg-red-50 rounded-lg border border-red-100">
                     <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
                     <p className="text-xs text-red-700 leading-relaxed">{job.error_message}</p>
+                </div>
+            )}
+
+            {job.error_message && job.status === 'stopped' && (
+                <div className="flex items-start gap-2 p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <Square className="w-4 h-4 text-orange-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-orange-700 leading-relaxed">{job.error_message}</p>
                 </div>
             )}
 

@@ -49,7 +49,8 @@ export default function Dashboard() {
         queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100' },
         running: { icon: TrendingUp, color: 'text-blue-500', bg: 'bg-blue-100' },
         done: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-100' },
-        error: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-100' }
+        error: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-100' },
+        stopped: { icon: AlertCircle, color: 'text-orange-500', bg: 'bg-orange-100' }
     };
 
     return (

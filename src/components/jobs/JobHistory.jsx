@@ -63,7 +63,8 @@ export default function JobHistory({ onSelectJob, selectedJobId }) {
         queued: { icon: Clock, color: 'bg-amber-100 text-amber-800' },
         running: { icon: Play, color: 'bg-blue-100 text-blue-800' },
         done: { icon: CheckCircle, color: 'bg-green-100 text-green-800' },
-        error: { icon: XCircle, color: 'bg-red-100 text-red-800' }
+        error: { icon: XCircle, color: 'bg-red-100 text-red-800' },
+        stopped: { icon: XCircle, color: 'bg-orange-100 text-orange-800' }
     };
 
     if (loading) {

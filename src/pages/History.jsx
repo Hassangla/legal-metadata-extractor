@@ -125,7 +125,8 @@ export default function History() {
         queued: { icon: Clock, color: 'text-amber-500', bg: 'bg-amber-100', label: 'Queued' },
         running: { icon: Play, color: 'text-blue-500', bg: 'bg-blue-100', label: 'Running' },
         done: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-100', label: 'Completed' },
-        error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' }
+        error: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-100', label: 'Error' },
+        stopped: { icon: XCircle, color: 'text-orange-500', bg: 'bg-orange-100', label: 'Stopped' }
     };
 
     const filteredJobs = jobs.filter(job =>
