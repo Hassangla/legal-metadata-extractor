@@ -87,29 +87,45 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke the existing `process` action via the SDK so all the complex
-            // extraction / verification / pricing logic stays in one place.
+            // Invoke the existing `process` action via the SDK.
+            // Use retries with backoff to handle transient 403/5xx errors.
             let batchResp;
-            try {
-                console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
-                const invokeResult = await sr.functions.invoke('jobProcessor', {
-                    action: 'process',
-                    job_id,
-                });
-                // The SDK returns an axios-like response; extract .data
-                batchResp = invokeResult?.data || invokeResult;
-                console.log(`[processQueuedJobs] jobProcessor returned. remaining=${batchResp?.remaining}`);
-            } catch (invokeErr) {
-                console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, String(invokeErr?.message || invokeErr));
-                // If the jobProcessor itself set the job to error, we respect that and stop.
-                const afterErr = await sr.entities.Job.filter({ id: job_id });
-                if (afterErr[0]?.status === 'error') {
-                    lastResult = { status: 'error', error: String(invokeErr?.message || invokeErr) };
+            const MAX_INVOKE_RETRIES = 3;
+            let invokeSuccess = false;
+            for (let attempt = 0; attempt < MAX_INVOKE_RETRIES; attempt++) {
+                try {
+                    if (attempt > 0) {
+                        console.log(`[processQueuedJobs] Retry ${attempt} for batch ${batchesRun + 1}...`);
+                        await sleep(2_000 * Math.pow(2, attempt));
+                    } else {
+                        console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
+                    }
+                    const invokeResult = await sr.functions.invoke('jobProcessor', {
+                        action: 'process',
+                        job_id,
+                    });
+                    batchResp = invokeResult?.data || invokeResult;
+                    console.log(`[processQueuedJobs] jobProcessor returned. remaining=${batchResp?.remaining}`);
+                    invokeSuccess = true;
                     break;
+                } catch (invokeErr) {
+                    const errMsg = String(invokeErr?.message || invokeErr);
+                    console.error(`[processQueuedJobs] invoke error (attempt ${attempt + 1}/${MAX_INVOKE_RETRIES}):`, errMsg);
+                    // If the job is in error state, stop immediately
+                    const afterErr = await sr.entities.Job.filter({ id: job_id });
+                    if (afterErr[0]?.status === 'error' || afterErr[0]?.status === 'paused') {
+                        lastResult = { status: afterErr[0].status };
+                        invokeSuccess = false;
+                        break;
+                    }
                 }
-                // Transient error — wait a bit then try again in this same invocation
-                await sleep(3_000);
-                continue;
+            }
+            if (!invokeSuccess) {
+                // All retries failed or job entered terminal state
+                if (!lastResult) {
+                    console.error(`[processQueuedJobs] All ${MAX_INVOKE_RETRIES} retries failed. Will retry on next automation tick.`);
+                }
+                break;
             }
 
             batchesRun++;
