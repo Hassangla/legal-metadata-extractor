@@ -124,20 +124,18 @@ Deno.serve(async (req) => {
 
         let skip = 0;
         while (true) {
-            const page = await base44.entities.JobRow.filter(
+            let page = await base44.entities.JobRow.filter(
                 { job_id },
                 'row_index',
                 PAGE_SIZE,
                 skip
             );
-            if (!page.length) break;
+            if (typeof page === 'string') { try { page = JSON.parse(page); } catch { page = []; } }
+            if (!Array.isArray(page) || !page.length) break;
 
             for (const row of page) {
                 outputAoa.push(rowToOutputAoaRow(row));
                 evidenceAoa.push(rowToEvidenceAoaRow(row));
-                // Drop references so GC can collect each row after use
-                row.evidence_json = null;
-                row.input_data = null;
             }
 
             if (page.length < PAGE_SIZE) break;
