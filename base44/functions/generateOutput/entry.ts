@@ -195,6 +195,16 @@ Deno.serve(async (req) => {
 
         const base64Len = base64Data.length;
 
+        // TEMP DEBUG MODE: return debug info only
+        if (outputAoa.length <= 1) {
+            // No data rows - return debug info to diagnose
+            return Response.json({
+                success: false,
+                error: 'No data rows found',
+                _debug: { totalDataRows: outputAoa.length - 1, totalFetched, nonEmptyOutputRows, firstRow: debugFirstRow, base64Size: base64Len, job_id },
+            });
+        }
+
         return Response.json({
             success: true,
             filename,
