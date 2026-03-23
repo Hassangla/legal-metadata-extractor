@@ -107,36 +107,11 @@ Deno.serve(async (req) => {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
-        // Self-chain: check if more work remains
-        let shouldChain = false;
-        if (lastResult?.status !== 'done' && lastResult?.status !== 'error' && lastResult?.status !== 'paused') {
-            shouldChain = true;
-        }
-        if (!shouldChain) {
-            try {
-                const [otherQueued, otherRunning] = await Promise.all([
-                    sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
-                    sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
-                ]);
-                if (otherQueued.length || otherRunning.length) shouldChain = true;
-            } catch (_) {}
-        }
-
-        if (shouldChain) {
-            console.log(`[processQueuedJobs] Self-chaining — more work remains.`);
-            await sleep(1_000);
-            try {
-                sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                await sleep(500);
-            } catch (_) {}
-        }
-
         return Response.json({
             job_id,
             batches_run: batchesRun,
             elapsed_seconds: elapsed,
             last_result: lastResult,
-            chained: shouldChain,
         });
 
     } catch (error) {
