@@ -1970,25 +1970,17 @@ Return ONLY valid JSON — no markdown, no explanation.`;
                     }
                 }
 
-                const newProcessedRows = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
-                const pendingLeft = Math.max((job.total_rows || 0) - newProcessedRows, 0);
-                const newStatus = pendingLeft <= 0 ? 'done' : 'running';
-                const totalInputTokens = (job.total_input_tokens || 0) + batchInputTokens;
-                const totalOutputTokens = (job.total_output_tokens || 0) + batchOutputTokens;
-                const updatePayload = {
-                    processed_rows: newProcessedRows,
-                    status: newStatus,
-                    progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pendingLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount },
-                    total_input_tokens: totalInputTokens,
-                    total_output_tokens: totalOutputTokens,
-                };
-                if (totalInputTokens > 0 || totalOutputTokens > 0) {
-                    updatePayload.estimated_cost_usd = modelInputPrice > 0
-                        ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, totalInputTokens, totalOutputTokens)
-                        : estimateCostFromTable(job.model_id, totalInputTokens, totalOutputTokens);
-                }
-                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, updatePayload));
-                return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pendingLeft });
+                const endCheck = await withEntityRetry(() => base44.entities.Job.filter({ id: job_id }));
+                const endSt = endCheck.length ? endCheck[0].status : null;
+                const newPR = Math.min((job.processed_rows || 0) + processedCount + batchErrorCount, job.total_rows || 0);
+                const pLeft = Math.max((job.total_rows || 0) - newPR, 0);
+                const newSt = (endSt === 'stopped' || endSt === 'paused') ? endSt : (pLeft <= 0 ? 'done' : 'running');
+                const tIn = (job.total_input_tokens || 0) + batchInputTokens, tOut = (job.total_output_tokens || 0) + batchOutputTokens;
+                const upd = { processed_rows: newPR, status: newSt, total_input_tokens: tIn, total_output_tokens: tOut,
+                    progress_json: { ...(job.progress_json || {}), current_batch: (job.progress_json?.current_batch || 0) + 1, last_row_index: pendingRows[pendingRows.length - 1]?.row_index || 0, pending: pLeft, processing: 0, done: (job.progress_json?.done || 0) + processedCount, error: (job.progress_json?.error || 0) + batchErrorCount } };
+                if (tIn > 0 || tOut > 0) upd.estimated_cost_usd = modelInputPrice > 0 ? estimateCostFromPricing(modelInputPrice, modelOutputPrice, tIn, tOut) : estimateCostFromTable(job.model_id, tIn, tOut);
+                const updatedJob = await withEntityRetry(() => base44.entities.Job.update(job_id, upd));
+                return Response.json({ job: updatedJob, processed_this_batch: processedCount, remaining: pLeft });
 
                 } catch (fatalErr) {
                     const fatalMsg = `Fatal processing error: ${fatalErr?.message || 'Unknown'}`;
