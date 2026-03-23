@@ -112,43 +112,30 @@ Deno.serve(async (req) => {
                 break;
             }
 
-            // Invoke the existing `process` action via the SDK.
-            // Use retries with backoff to handle transient 403/5xx errors.
+            // Invoke jobProcessor via direct HTTP fetch to avoid 403 issues
+            // with sr.functions.invoke when called from automation context.
             let batchResp;
-            const MAX_INVOKE_RETRIES = 3;
             let invokeSuccess = false;
-            for (let attempt = 0; attempt < MAX_INVOKE_RETRIES; attempt++) {
-                try {
-                    if (attempt > 0) {
-                        console.log(`[processQueuedJobs] Retry ${attempt} for batch ${batchesRun + 1}...`);
-                        await sleep(2_000 * Math.pow(2, attempt));
-                    } else {
-                        console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
-                    }
-                    const invokeResult = await sr.functions.invoke('jobProcessor', {
-                        action: 'process',
-                        job_id,
-                    });
-                    batchResp = invokeResult?.data || invokeResult;
-                    console.log(`[processQueuedJobs] jobProcessor returned. remaining=${batchResp?.remaining}`);
-                    invokeSuccess = true;
-                    break;
-                } catch (invokeErr) {
-                    const errMsg = String(invokeErr?.message || invokeErr);
-                    console.error(`[processQueuedJobs] invoke error (attempt ${attempt + 1}/${MAX_INVOKE_RETRIES}):`, errMsg);
-                    // If the job is in error state, stop immediately
-                    const afterErr = await sr.entities.Job.filter({ id: job_id });
-                    if (afterErr[0]?.status === 'error' || afterErr[0]?.status === 'paused') {
-                        lastResult = { status: afterErr[0].status };
-                        invokeSuccess = false;
-                        break;
-                    }
+            console.log(`[processQueuedJobs] Invoking jobProcessor batch ${batchesRun + 1} for job ${job_id}...`);
+            try {
+                const resp = await fetch(`${functionBaseUrl}/jobProcessor`, {
+                    method: 'POST',
+                    headers: reqHeaders,
+                    body: JSON.stringify({ action: 'process', job_id }),
+                });
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`HTTP ${resp.status}: ${errText.slice(0, 300)}`);
                 }
-            }
-            if (!invokeSuccess) {
-                // All retries failed or job entered terminal state
-                if (!lastResult) {
-                    console.error(`[processQueuedJobs] All ${MAX_INVOKE_RETRIES} retries failed. Will retry on next automation tick.`);
+                batchResp = await resp.json();
+                console.log(`[processQueuedJobs] jobProcessor returned. remaining=${batchResp?.remaining}`);
+                invokeSuccess = true;
+            } catch (invokeErr) {
+                console.error(`[processQueuedJobs] invoke error on batch ${batchesRun + 1}:`, String(invokeErr?.message || invokeErr));
+                // If the job is in error state, stop immediately
+                const afterErr = await sr.entities.Job.filter({ id: job_id });
+                if (afterErr[0]?.status === 'error' || afterErr[0]?.status === 'paused') {
+                    lastResult = { status: afterErr[0].status };
                 }
                 break;
             }
