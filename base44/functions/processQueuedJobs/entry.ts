@@ -108,15 +108,13 @@ Deno.serve(async (req) => {
             }
 
             batchesRun++;
-            const remaining = batchResp?.remaining ?? batchResp?.data?.remaining;
             lastResult = batchResp?.data || batchResp;
-
-            console.log(`[processQueuedJobs] Batch ${batchesRun} done. remaining=${remaining}`);
-
-            if (remaining === 0 || remaining === undefined) {
-                // jobProcessor already set status to 'done' — we're finished.
-                break;
-            }
+            const remaining = lastResult?.remaining ?? batchResp?.remaining;
+            console.log(`[processQueuedJobs] Batch ${batchesRun} done. remaining=${remaining} status=${lastResult?.job?.status}`);
+            if (remaining === 0 || remaining === undefined) break;
+            // If process detected a stop/pause, stop immediately
+            const jobSt = lastResult?.job?.status;
+            if (jobSt && ['stopped','paused','done','error'].includes(jobSt)) break;
 
             // Small inter-batch pause to avoid hammering the provider.
             if (Date.now() - startTime + BATCH_INTER_DELAY_MS < MAX_WALL_MS) {
