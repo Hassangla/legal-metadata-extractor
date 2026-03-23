@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.21';
 
 // Maximum wall-clock milliseconds to spend in one automation invocation.
 // Base44 automation functions have a ~25s CPU limit; we stop at 200s wall-clock
@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
             }
             const freshJob = freshJobs[0];
 
-            if (freshJob.status === 'done' || freshJob.status === 'error') {
+            if (freshJob.status === 'done' || freshJob.status === 'error' || freshJob.status === 'paused') {
                 console.log(`[processQueuedJobs] Job ${job_id} finished with status=${freshJob.status}.`);
                 lastResult = { status: freshJob.status };
                 break;
@@ -129,32 +129,44 @@ Deno.serve(async (req) => {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[processQueuedJobs] Done. job=${job_id} batches=${batchesRun} elapsed=${elapsed}s`);
 
-        // Self-chain: if there are still queued/running jobs, schedule another
-        // invocation so processing continues without relying on the frontend or
-        // waiting for the next automation scheduler tick.
-        const needsMoreWork =
-            lastResult?.status !== 'done' &&
-            lastResult?.status !== 'error' &&
-            batchesRun > 0;
+        // ── SELF-CHAIN: Ensure processing continues without waiting for the
+        // next 5-minute automation tick. We schedule a continuation if there's
+        // still work to do (current job or other jobs in queue).
+        let shouldChain = false;
 
-        if (needsMoreWork) {
+        // Check if the current job still needs work
+        if (lastResult?.status !== 'done' && lastResult?.status !== 'error' && lastResult?.status !== 'paused') {
+            shouldChain = true;
+        }
+
+        // Also check for other queued/running jobs
+        if (!shouldChain) {
             try {
-                // Small delay before re-invoking to avoid tight loops
-                await sleep(2_000);
-                sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                console.log(`[processQueuedJobs] Self-chained — more work remains.`);
-            } catch (_) { /* non-fatal */ }
-        } else {
-            // Check if there are other queued jobs waiting
-            try {
-                const otherQueued = await sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1);
-                const otherRunning = await sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1);
+                const [otherQueued, otherRunning] = await Promise.all([
+                    sr.entities.Job.filter({ status: 'queued' }, 'created_date', 1),
+                    sr.entities.Job.filter({ status: 'running' }, 'updated_date', 1),
+                ]);
                 if (otherQueued.length || otherRunning.length) {
-                    await sleep(2_000);
-                    sr.functions.invoke('processQueuedJobs', {}).catch(() => {});
-                    console.log(`[processQueuedJobs] Self-chained — other jobs in queue.`);
+                    shouldChain = true;
                 }
-            } catch (_) { /* non-fatal */ }
+            } catch (_) {}
+        }
+
+        if (shouldChain) {
+            console.log(`[processQueuedJobs] Self-chaining — more work remains.`);
+            // Use a small delay then AWAIT the chain invocation to ensure it actually fires
+            // before this function's response is sent back.
+            await sleep(1_000);
+            try {
+                // Don't await the actual processing — just ensure the invoke request is sent
+                sr.functions.invoke('processQueuedJobs', {}).catch((e) => {
+                    console.error(`[processQueuedJobs] Chain invoke failed:`, e.message);
+                });
+                // Give the HTTP request time to leave before we return
+                await sleep(500);
+            } catch (chainErr) {
+                console.error(`[processQueuedJobs] Failed to self-chain:`, chainErr.message);
+            }
         }
 
         return Response.json({
@@ -162,6 +174,7 @@ Deno.serve(async (req) => {
             batches_run: batchesRun,
             elapsed_seconds: elapsed,
             last_result: lastResult,
+            chained: shouldChain,
         });
 
     } catch (error) {
