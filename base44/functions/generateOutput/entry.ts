@@ -129,15 +129,18 @@ Deno.serve(async (req) => {
 
         let skip = 0;
         let debugFirstRow = null;
+        let totalFetched = 0;
+        let nonEmptyOutputRows = 0;
         while (true) {
             let page = await base44.entities.JobRow.filter(
-                { job_id },
+                { job_id, status: 'done' },
                 'row_index',
                 PAGE_SIZE,
                 skip
             );
             if (typeof page === 'string') { try { page = JSON.parse(page); } catch { page = []; } }
             if (!Array.isArray(page) || !page.length) break;
+            totalFetched += page.length;
 
             for (const row of page) {
                 if (!debugFirstRow) {
@@ -146,17 +149,21 @@ Deno.serve(async (req) => {
                         evidence_json_type: typeof row.evidence_json,
                         output_json_type: typeof row.output_json,
                         input_data_type: typeof row.input_data,
-                        evidence_json_preview: String(row.evidence_json).slice(0, 200),
-                        output_json_preview: String(row.output_json).slice(0, 200),
+                        evidence_json_preview: JSON.stringify(row.evidence_json).slice(0, 300),
+                        output_json_preview: JSON.stringify(row.output_json).slice(0, 300),
                     };
                 }
-                outputAoa.push(rowToOutputAoaRow(row));
+                const outputRow = rowToOutputAoaRow(row);
+                const hasContent = outputRow.some((cell, i) => i > 0 && cell !== '');
+                if (hasContent) nonEmptyOutputRows++;
+                outputAoa.push(outputRow);
                 evidenceAoa.push(rowToEvidenceAoaRow(row));
             }
 
             if (page.length < PAGE_SIZE) break;
             skip += PAGE_SIZE;
         }
+        console.log(`[generateOutput] Fetched ${totalFetched} rows, ${nonEmptyOutputRows} with non-empty output, ${outputAoa.length - 1} total data rows`);
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outputAoa), 'Output');
