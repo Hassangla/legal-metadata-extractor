@@ -131,10 +131,12 @@ Deno.serve(async (req) => {
         let debugFirstRow = null;
         let totalFetched = 0;
         let nonEmptyOutputRows = 0;
+        // Use service role for reading JobRows to avoid permission issues
+        const sr = base44.asServiceRole;
         while (true) {
             let page;
             try {
-                page = await base44.entities.JobRow.filter(
+                page = await sr.entities.JobRow.filter(
                     { job_id: String(job_id) },
                     'row_index',
                     PAGE_SIZE,
